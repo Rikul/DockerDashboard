@@ -100,13 +100,28 @@ export function LogViewer({ id, name, onClose }: { id: string; name: string; onC
     return f ? lines.filter((l) => l.text.toLowerCase().includes(f)) : lines;
   }, [lines, filter]);
 
+  const blobs = useRef(new Set<string>());
+  useEffect(() => {
+    const pending = blobs.current;
+    return () => {
+      pending.forEach((u) => URL.revokeObjectURL(u));
+      pending.clear();
+    };
+  }, []);
+
   const download = () => {
     const blob = new Blob([lines.map((l) => l.text).join('\n')], { type: 'text/plain' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `${name}.log`;
     a.click();
-    URL.revokeObjectURL(a.href);
+    // Revoking right away can cancel the download in some browsers, so wait
+    // a little; anything still pending is revoked when the viewer closes.
+    const url = a.href;
+    blobs.current.add(url);
+    setTimeout(() => {
+      if (blobs.current.delete(url)) URL.revokeObjectURL(url);
+    }, 10_000);
   };
 
   return (

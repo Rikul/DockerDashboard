@@ -67,8 +67,9 @@ export function DataTable<T>({
       r = [...r].sort((a, b) => {
         let va = get(a);
         let vb = get(b);
-        if (va == null) return 1;
-        if (vb == null) return -1;
+        // Empty values always go last, and compare equal to each other so
+        // their order is stable from one poll to the next.
+        if (va == null || vb == null) return va == null ? (vb == null ? 0 : 1) : -1;
         if (typeof va === 'string') va = va.toLowerCase();
         if (typeof vb === 'string') vb = vb.toLowerCase();
         return (va < vb ? -1 : va > vb ? 1 : 0) * dir;

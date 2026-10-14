@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, UNAUTHORIZED_EVENT } from './api';
 import { ActionsProvider } from './actions';
 import { Button, ErrorLine } from './components/ui';
@@ -66,7 +66,12 @@ function Login({ onDone }: { onDone: () => void }) {
   const [token, setToken] = useState('');
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  // A ref, not just `busy`: two quick Enter presses can both run before
+  // React re-renders, and each failed attempt counts against the throttle.
+  const inflight = useRef(false);
   const submit = async () => {
+    if (inflight.current) return;
+    inflight.current = true;
     setBusy(true);
     setError(undefined);
     try {
@@ -75,6 +80,7 @@ function Login({ onDone }: { onDone: () => void }) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      inflight.current = false;
       setBusy(false);
     }
   };
