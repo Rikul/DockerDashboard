@@ -221,9 +221,6 @@ func equal(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []by
 
 // authState reports whether r is signed in, and how.
 func (s *Server) authState(r *http.Request) (ok, bearer bool) {
-	if s.cfg.NoAuth {
-		return true, false
-	}
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return s.checkToken(r, strings.TrimPrefix(h, "Bearer ")), true
 	}
@@ -274,17 +271,12 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	ok, _ := s.authState(r)
 	resp := map[string]any{
 		"authenticated": ok,
-		"auth_required": !s.cfg.NoAuth,
 		"read_only":     s.cfg.ReadOnly,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.NoAuth {
-		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
-		return
-	}
 	var body struct {
 		Token string `json:"token"`
 	}

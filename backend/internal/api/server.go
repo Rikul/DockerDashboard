@@ -19,10 +19,8 @@ import (
 
 // Config controls the server's behaviour.
 type Config struct {
-	// Token is the shared secret users log in with. Empty disables auth,
-	// which is only allowed when NoAuth is set.
+	// Token is the shared secret users log in with (required).
 	Token    string
-	NoAuth   bool
 	ReadOnly bool
 	// Static is the built frontend; nil serves the API only.
 	Static fs.FS

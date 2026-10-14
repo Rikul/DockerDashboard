@@ -16,14 +16,15 @@ services:
       - "127.0.0.1:8080:8080"
     environment:
       DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?set DASHBOARD_TOKEN in .env}
-      READ_ONLY: ${READ_ONLY:-false}
+      # Read-only by default; set READ_ONLY=false in .env to allow changes.
+      READ_ONLY: ${READ_ONLY:-true}
       # Optional private registry for the Registry tab:
       REGISTRY_URL: ${REGISTRY_URL:-}
       REGISTRY_USERNAME: ${REGISTRY_USERNAME:-}
       REGISTRY_PASSWORD: ${REGISTRY_PASSWORD:-}
     volumes:
       # Full control of Docker. Note: ":ro" on a socket does NOT make the API
-      # read-only; use READ_ONLY=true or the socket proxy below for that.
+      # read-only; READ_ONLY or the socket proxy below does that.
       - /var/run/docker.sock:/var/run/docker.sock
 
   # ---- Hardened alternative: talk to Docker through a filtering proxy.

@@ -20,12 +20,14 @@ docker compose up -d --build
 
 Open <http://localhost:8080> and sign in with the token from `.env`.
 
+The dashboard starts **read-only**. To start, stop, remove, pull and so on, add `READ_ONLY=false` to `.env` and run `docker compose up -d` again.
+
 ## Development
 
 Requirements: Go 1.24+, Node 22+, and a Docker daemon.
 
 ```sh
-make dev     # Go API on 127.0.0.1:8080 + Vite on :5173 (proxying /api). Token: dev-token-change-me
+make dev     # Go API on 127.0.0.1:8080 + Vite on :5173 (proxying /api), writes enabled. Token: dev-token-change-me
 make test    # go vet, go test -race, TypeScript type-check
 make build   # bin/docker-dashboard with the frontend embedded
 ```
@@ -36,9 +38,8 @@ Running the backend on its own without building the frontend first serves the AP
 
 | Variable | Default | |
 |---|---|---|
-| `DASHBOARD_TOKEN` | — (required) | Shared secret for signing in, at least 16 characters. Or set `DASHBOARD_TOKEN_FILE` to read it from a file (Docker secrets). |
-| `DASHBOARD_AUTH` | | Set to `none` to disable sign-in. Only do this on a machine nobody else can reach. |
-| `READ_ONLY` | `false` | `true` refuses every change. Viewing and logs still work. |
+| `DASHBOARD_TOKEN` | — (required) | Shared secret for signing in, at least 16 characters. Or set `DASHBOARD_TOKEN_FILE` to read it from a file (Docker secrets). Sign-in can't be turned off. |
+| `READ_ONLY` | `true` | Refuses every change; viewing and logs still work. Set `false` to allow changes. |
 | `LISTEN_ADDR` | `:8080` | Address the server listens on. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | `unix://…` or `tcp://host:2375`. TLS to the daemon isn't supported yet. |
 | `STATS_INTERVAL` | `5s` | How often CPU and memory are sampled. One hour of history is kept in memory. |
@@ -48,9 +49,10 @@ Running the backend on its own without building the frontend first serves the AP
 
 ## Security
 
-**Access to the Docker socket is root on the host.** Anyone who can sign in to this dashboard can, in effect, control the machine. Defaults are set with that in mind:
+**Access to the Docker socket is root on the host.** Anyone who can sign in to this dashboard can, in effect, control the machine once writes are enabled. Defaults are set with that in mind:
 
-- Sign-in is required unless you explicitly set `DASHBOARD_AUTH=none`.
+- Sign-in is always required, and the server won't start without a token of at least 16 characters.
+- The server is read-only unless `READ_ONLY=false` is set.
 - The session is an `HttpOnly`, `SameSite=Strict` cookie signed with a key derived from the token, so the token itself is never stored in the browser. The server enforces its 7-day lifetime, signing out revokes that session, and changing the token signs everyone out. Revocations are kept in memory, so a restart forgets them (the sessions still expire).
 - Every write must carry an `X-Requested-With` header, which protects against cross-site requests. Repeated wrong tokens (at login or as a bearer token) are answered more and more slowly, counted per client address (per /64 for IPv6), and one address's attempts are checked one at a time. If an attacker fills the 4096 tracked addresses with recent failures, new addresses are spread over 64 shared buckets, so a new client may then share a wait with an attacker. Behind a reverse proxy every client shares the proxy's address, so they share that slowdown.
 - Responses carry a strict Content-Security-Policy, `X-Frame-Options: DENY` and `nosniff`.
@@ -60,7 +62,7 @@ Running the backend on its own without building the frontend first serves the AP
 Before exposing it to a network:
 
 1. Put it behind HTTPS (Caddy, Traefik, nginx). The cookie gets `Secure` when `X-Forwarded-Proto: https` is set.
-2. Use `READ_ONLY=true` for viewers, or run a second, read-only instance for them.
+2. Leave `READ_ONLY` on for viewers. If some people need to make changes, run a second instance with `READ_ONLY=false` and a different token for them.
 3. Consider the [socket proxy](docker-compose.yml) setup, which limits which Docker API calls are possible at all. Mounting the socket `:ro` does **not** do this.
 
 Scripts can call the API with `Authorization: Bearer $DASHBOARD_TOKEN`.

@@ -2,7 +2,6 @@
 
 export interface Session {
   authenticated: boolean;
-  auth_required: boolean;
   read_only: boolean;
 }
 

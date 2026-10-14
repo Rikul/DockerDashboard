@@ -153,11 +153,9 @@ function Dashboard({ session, onSignOut }: { session: Session; onSignOut: () => 
           <h1 className="title">{system.data?.name ? `Docker host · ${system.data.name}` : 'Docker host'}</h1>
           <div className="head-actions">
             {session.read_only && <span className="pill warn">read-only</span>}
-            {session.auth_required && (
-              <button type="button" className="btn" onClick={onSignOut}>
-                Sign out
-              </button>
-            )}
+            <button type="button" className="btn" onClick={onSignOut}>
+              Sign out
+            </button>
           </div>
         </div>
         <p className="takeaway">

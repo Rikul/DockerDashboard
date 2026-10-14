@@ -30,8 +30,11 @@ func env(key, def string) string {
 	return def
 }
 
-func envBool(key string) bool {
-	b, _ := strconv.ParseBool(os.Getenv(key))
+func envBool(key string, def bool) bool {
+	b, err := strconv.ParseBool(os.Getenv(key))
+	if err != nil {
+		return def
+	}
 	return b
 }
 
@@ -47,7 +50,7 @@ func run() error {
 	flag.Parse()
 
 	level := slog.LevelInfo
-	if envBool("DEBUG") {
+	if envBool("DEBUG", false) {
 		level = slog.LevelDebug
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
@@ -60,15 +63,11 @@ func run() error {
 		}
 		token = strings.TrimSpace(string(b))
 	}
-	noAuth := strings.EqualFold(os.Getenv("DASHBOARD_AUTH"), "none")
 	switch {
-	case token == "" && !noAuth:
-		return errors.New("set DASHBOARD_TOKEN (or DASHBOARD_TOKEN_FILE) to a long random secret; " +
-			"to run without sign-in on a trusted machine, set DASHBOARD_AUTH=none")
-	case token != "" && len(token) < 16:
+	case token == "":
+		return errors.New("set DASHBOARD_TOKEN (or DASHBOARD_TOKEN_FILE) to a long random secret")
+	case len(token) < 16:
 		return errors.New("DASHBOARD_TOKEN must be at least 16 characters")
-	case noAuth:
-		slog.Warn("sign-in is DISABLED (DASHBOARD_AUTH=none): anyone who can reach this port controls Docker on this host")
 	}
 
 	dc, err := docker.New(os.Getenv("DOCKER_HOST"))
@@ -102,11 +101,12 @@ func run() error {
 	defer stop()
 	go collector.Run(ctx)
 
+	readOnly := envBool("READ_ONLY", true)
 	static := web.FS()
 	if static == nil {
 		slog.Warn("frontend not embedded; serving the API only (run `make build` or use the Vite dev server)")
 	}
-	srv := api.New(api.Config{Token: token, NoAuth: noAuth, ReadOnly: envBool("READ_ONLY"), Static: static}, dc, collector, reg)
+	srv := api.New(api.Config{Token: token, ReadOnly: readOnly, Static: static}, dc, collector, reg)
 
 	httpSrv := &http.Server{
 		Addr:              *addr,
@@ -120,7 +120,7 @@ func run() error {
 	httpSrv.RegisterOnShutdown(srv.StopStreams)
 	errc := make(chan error, 1)
 	go func() {
-		slog.Info("listening", "addr", *addr, "read_only", envBool("READ_ONLY"), "registry", os.Getenv("REGISTRY_URL"))
+		slog.Info("listening", "addr", *addr, "read_only", readOnly, "registry", os.Getenv("REGISTRY_URL"))
 		errc <- httpSrv.ListenAndServe()
 	}()
 	select {

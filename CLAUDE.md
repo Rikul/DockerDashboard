@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Requires Go 1.24+, Node 22+, and a Docker daemon (for running, not for tests).
 
 ```sh
-make dev        # Go API on 127.0.0.1:8080 + Vite on :5173 (proxies /api). Sign in with "dev-token-change-me"
+make dev        # Go API on 127.0.0.1:8080 + Vite on :5173 (proxies /api), READ_ONLY=false. Sign in with "dev-token-change-me"
 make test       # go vet + go test -race (backend) and tsc type-check (frontend)
 make lint       # gofmt check (CI fails on unformatted Go)
 make build      # builds frontend, then bin/docker-dashboard with it embedded
@@ -36,6 +36,7 @@ Vite's `outDir` is `backend/internal/web/dist` (emptied on build, `.gitkeep` res
 ## Conventions worth knowing
 
 - Every state-changing request must carry `X-Requested-With`; the frontend wrapper does this, so use it rather than raw `fetch`.
-- `READ_ONLY=true` makes the server refuse all writes; new mutating endpoints must respect it.
+- Sign-in is always required (`DASHBOARD_TOKEN`, ≥16 chars); there is no auth-disabled mode.
+- `READ_ONLY` defaults to `true` (the server refuses all writes unless it is set to `false`); new mutating endpoints must respect it.
 - Container env vars must never be sent to the browser (stripped in the API layer).
 - CI (`.github/workflows/ci.yml`) runs gofmt, `go vet`, `go test -race`, `npm ci` and `npm run build`.
