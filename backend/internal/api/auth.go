@@ -28,8 +28,10 @@ const (
 // a key derived from the token. The server checks the signature and the
 // expiry, so a copied cookie stops working after sessionTTL and changing the
 // token signs everyone out; the token itself never sits in a cookie. Logout
-// revokes the session's id, which is remembered until the cookie would have
-// expired anyway (in memory: a restart forgets revocations, not sessions).
+// revokes the session's id. Revoked ids are kept in memory (a restart
+// forgets revocations, not sessions) and those past their expiry are
+// dropped at the next logout; an expired entry is never consulted, since
+// parseSession already rejects the cookie.
 const sessionPrefix = "v2"
 
 func (s *Server) sessionMAC(payload string) string {

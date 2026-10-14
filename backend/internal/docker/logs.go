@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"unicode/utf8"
 )
 
 // LogLine is one line of container output.
@@ -108,21 +109,35 @@ func (l *LogReader) add(stream, chunk string) {
 			if len(rest) > maxLine {
 				// Emit the head once and skip the rest of the line, rather
 				// than emitting its later chunks as separate lines.
-				l.pending = append(l.pending, LogLine{Stream: stream, Text: rest[:maxLine] + truncatedMark})
+				l.pending = append(l.pending, LogLine{Stream: stream, Text: cut(rest)})
 				rest = ""
 				l.skip[stream] = true
 			}
 			l.partial[stream] = rest
 			return
 		}
-		line := trimCR(l.partial[stream] + chunk[:i])
+		// The length is checked before trimming \r, as on the unterminated
+		// path above, so the cap means the same for every line.
+		line := l.partial[stream] + chunk[:i]
 		delete(l.partial, stream)
 		if len(line) > maxLine {
-			line = line[:maxLine] + truncatedMark
+			line = cut(line)
+		} else {
+			line = trimCR(line)
 		}
 		l.pending = append(l.pending, LogLine{Stream: stream, Text: line})
 		chunk = chunk[i+1:]
 	}
+}
+
+// cut shortens an over-long line to at most maxLine bytes, backing up to a
+// rune boundary so the result stays valid UTF-8, and marks it.
+func cut(s string) string {
+	n := maxLine
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + truncatedMark
 }
 
 func trimCR(s string) string {

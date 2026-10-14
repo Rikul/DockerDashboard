@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func frame(stream byte, s string) []byte {
@@ -154,5 +155,25 @@ func TestLogReaderCutsOverlongLineOnce(t *testing.T) {
 		if len(got) != 2 || got[1].Text != "next" || !strings.HasSuffix(got[0].Text, truncatedMark) || len(got[0].Text) != maxLine+len(truncatedMark) {
 			t.Fatalf("tty=%v: want one cut line then next, got %d lines (first %d bytes)", tty, len(got), len(got[0].Text))
 		}
+	}
+}
+
+func TestLogReaderCutKeepsUTF8AndConsistentCap(t *testing.T) {
+	line := strings.Repeat("a", maxLine-1) + strings.Repeat("é", 40) + "\n"
+	got := readAll(t, NewLogReader(strings.NewReader(line), true))
+	if !utf8.ValidString(got[0].Text) || !strings.HasSuffix(got[0].Text, truncatedMark) {
+		t.Fatalf("cut line is not valid UTF-8 or not marked: %q", got[0].Text[maxLine-4:])
+	}
+	// Two raw lines of the same length are treated the same, \r or not.
+	cr := strings.Repeat("a", maxLine) + "\r\n"
+	plain := strings.Repeat("b", maxLine+1) + "\n"
+	got = readAll(t, NewLogReader(strings.NewReader(cr+plain), true))
+	if len(got) != 2 || strings.HasSuffix(got[0].Text, truncatedMark) != strings.HasSuffix(got[1].Text, truncatedMark) {
+		t.Fatalf("equal-length lines cut differently: %d lines", len(got))
+	}
+	// A line of exactly maxLine is kept whole.
+	got = readAll(t, NewLogReader(strings.NewReader(strings.Repeat("c", maxLine)+"\n"), true))
+	if len(got[0].Text) != maxLine {
+		t.Fatalf("a maxLine line was cut: %d", len(got[0].Text))
 	}
 }
