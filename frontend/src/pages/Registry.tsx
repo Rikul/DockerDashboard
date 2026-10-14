@@ -64,6 +64,9 @@ REGISTRY_PASSWORD=…                 # optional, or a token`}</pre>
       sub={data && `${tags.length} tags across ${repos} repositories · newest tags first, up to 25 per repository`}
     >
       {poll.error && <ErrorLine>Couldn’t read the registry: {poll.error}</ErrorLine>}
+      {data?.problems?.map((p) => (
+        <ErrorLine key={p}>{p}</ErrorLine>
+      ))}
       {poll.loading && !data ? (
         <Skeleton height={260} />
       ) : (

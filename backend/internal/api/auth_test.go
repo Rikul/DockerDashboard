@@ -91,3 +91,35 @@ func TestHealthFromStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestBearerFailuresCountTowardThrottling(t *testing.T) {
+	s := &Server{cfg: Config{Token: tok}}
+	h := s.authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	for range 2 {
+		if w := do(h, "GET", "/api/containers", "", map[string]string{"Authorization": "Bearer wrong"}); w.Code != 401 {
+			t.Fatalf("wrong bearer: %d", w.Code)
+		}
+	}
+	if s.loginFailures != 2 {
+		t.Fatalf("bearer failures not counted: %d", s.loginFailures)
+	}
+	if !s.checkToken(tok) || s.loginFailures != 0 {
+		t.Fatalf("a correct token should reset the failure count, got %d", s.loginFailures)
+	}
+}
+
+func TestRedactImageInspect(t *testing.T) {
+	m, err := redactImageInspect([]byte(`{"Id":"sha256:x","Config":{"Env":["SECRET=1"],"Cmd":["sh"]},"ContainerConfig":{"Env":["SECRET=1"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["Config"].(map[string]any)["Env"]; ok {
+		t.Fatal("Config.Env not removed")
+	}
+	if _, ok := m["ContainerConfig"].(map[string]any)["Env"]; ok {
+		t.Fatal("ContainerConfig.Env not removed")
+	}
+	if m["Config"].(map[string]any)["Cmd"] == nil {
+		t.Fatal("other fields should be kept")
+	}
+}

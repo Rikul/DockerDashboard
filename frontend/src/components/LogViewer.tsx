@@ -5,6 +5,11 @@ import { Modal } from './ui';
 
 const MAX_LINES = 5000;
 
+/** Keeps the last MAX_LINES of a, in place. */
+function trimBuffer(a: LogLine[]) {
+  if (a.length > MAX_LINES) a.splice(0, a.length - MAX_LINES);
+}
+
 /** Live container logs over Server-Sent Events. */
 export function LogViewer({ id, name, onClose }: { id: string; name: string; onClose: () => void }) {
   const [lines, setLines] = useState<LogLine[]>([]);
@@ -13,12 +18,14 @@ export function LogViewer({ id, name, onClose }: { id: string; name: string; onC
   const [timestamps, setTimestamps] = useState(false);
   const [filter, setFilter] = useState('');
   const [status, setStatus] = useState<'connecting' | 'live' | 'ended' | 'error'>('connecting');
+  const [endError, setEndError] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
   const boxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setLines([]);
     setStatus('connecting');
+    setEndError('');
     const es = new EventSource(api.logsUrl(id, tail, follow, timestamps));
     let buf: LogLine[] = [];
     // Batch incoming lines into one render per frame.
@@ -27,6 +34,7 @@ export function LogViewer({ id, name, onClose }: { id: string; name: string; onC
       raf = 0;
       const add = buf;
       buf = [];
+      trimBuffer(add);
       setLines((prev) => {
         const next = prev.concat(add);
         return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
@@ -36,13 +44,29 @@ export function LogViewer({ id, name, onClose }: { id: string; name: string; onC
     es.onmessage = (e) => {
       try {
         buf.push(JSON.parse(e.data) as LogLine);
+        // Animation frames pause in hidden tabs while events keep coming,
+        // so bound the pending buffer here too, not only on flush. Trim in
+        // chunks to keep the per-line cost constant.
+        if (buf.length > MAX_LINES * 2) trimBuffer(buf);
         if (!raf) raf = requestAnimationFrame(flush);
       } catch {
         /* ignore malformed */
       }
     };
-    es.addEventListener('end', () => {
-      setStatus('ended');
+    es.addEventListener('end', (e) => {
+      // The server sends reason "end" on EOF and the read error otherwise.
+      let reason = 'end';
+      try {
+        reason = (JSON.parse((e as MessageEvent<string>).data) as { reason?: string }).reason ?? 'end';
+      } catch {
+        /* treat malformed as a normal end */
+      }
+      if (reason === 'end') {
+        setStatus('ended');
+      } else {
+        setStatus('error');
+        setEndError(reason);
+      }
       es.close();
     });
     es.onerror = () => {
@@ -96,8 +120,8 @@ export function LogViewer({ id, name, onClose }: { id: string; name: string; onC
           <input type="checkbox" checked={timestamps} onChange={(e) => setTimestamps(e.target.checked)} /> Timestamps
         </label>
         <span className="spacer" />
-        <span className={`pill ${status === 'live' ? 'ok' : status === 'error' ? 'bad' : 'muted'}`}>
-          {status === 'live' ? (follow ? 'live' : 'loaded') : status}
+        <span className={`pill ${status === 'live' ? 'ok' : status === 'error' ? 'bad' : 'muted'}`} title={endError || undefined}>
+          {status === 'live' ? (follow ? 'live' : 'loaded') : endError ? 'stream failed' : status}
         </span>
         <button type="button" className="btn" onClick={download} disabled={!lines.length}>
           Download
@@ -124,6 +148,7 @@ export function LogViewer({ id, name, onClose }: { id: string; name: string; onC
       <p className="sub">
         {shown.length.toLocaleString()} lines{filter ? ` matching (of ${lines.length.toLocaleString()})` : ''} · stderr in red
         {lines.length >= MAX_LINES ? ` · keeping the newest ${MAX_LINES.toLocaleString()}` : ''}
+        {endError ? ` · the log stream failed, so output may be incomplete: ${endError}` : ''}
       </p>
     </Modal>
   );

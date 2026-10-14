@@ -8,7 +8,7 @@ dev:
 	@$(MAKE) -j2 dev-api dev-web
 
 dev-api:
-	cd backend && DASHBOARD_TOKEN=dev-token-change-me go run ./cmd/server
+	cd backend && DASHBOARD_TOKEN=dev-token-change-me go run ./cmd/server -addr 127.0.0.1:8080
 
 dev-web: frontend/node_modules
 	cd frontend && npm run dev

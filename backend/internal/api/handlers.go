@@ -476,8 +476,28 @@ func (s *Server) handleImageInspect(w http.ResponseWriter, r *http.Request) {
 		dockerError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(data)
+	out, err := redactImageInspect(data)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "decode image inspect: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// redactImageInspect drops the environment variables from a raw image
+// inspect, matching the container inspect: values baked into an image with
+// ENV often hold secrets, and read-only viewers must not see them.
+func redactImageInspect(data []byte) (map[string]any, error) {
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	for _, key := range []string{"Config", "ContainerConfig"} {
+		if cfg, ok := m[key].(map[string]any); ok {
+			delete(cfg, "Env")
+		}
+	}
+	return m, nil
 }
 
 func (s *Server) handleImageRemove(w http.ResponseWriter, r *http.Request) {
@@ -762,12 +782,12 @@ func (s *Server) handleRegistry(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	tags, err := s.registry.List(ctx, time.Minute, queryBool(r, "refresh"))
+	l, err := s.registry.List(ctx, time.Minute, queryBool(r, "refresh"))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "host": s.registry.Host(), "tags": tags})
+	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "host": s.registry.Host(), "tags": l.Tags, "problems": l.Problems})
 }
 
 func (s *Server) handleRegistryDelete(w http.ResponseWriter, r *http.Request) {

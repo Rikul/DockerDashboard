@@ -25,7 +25,7 @@ Open <http://localhost:8080> and sign in with the token from `.env`.
 Requirements: Go 1.24+, Node 22+, and a Docker daemon.
 
 ```sh
-make dev     # Go API on :8080 + Vite on :5173 (proxying /api). Token: dev-token-change-me
+make dev     # Go API on 127.0.0.1:8080 + Vite on :5173 (proxying /api). Token: dev-token-change-me
 make test    # go vet, go test -race, TypeScript type-check
 make build   # bin/docker-dashboard with the frontend embedded
 ```

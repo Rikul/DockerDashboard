@@ -32,8 +32,9 @@ export function ImagesPage({ poll, onChanged, filter, onFilter }: { poll: Poll<I
         try {
           return await api.removeImage(i.id);
         } catch (e) {
-          // Several tags on one image: removing by ID needs force.
-          if (e instanceof ApiError && e.status === 409 && /must be forced|referenced in multiple/i.test(e.message)) {
+          // Several tags on one image: removing by ID needs force. Only that
+          // conflict is retried; "used by stopped container" is surfaced.
+          if (e instanceof ApiError && e.status === 409 && /referenced in multiple repositories/i.test(e.message)) {
             return api.removeImage(i.id, true);
           }
           throw e;

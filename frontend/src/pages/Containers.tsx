@@ -23,22 +23,31 @@ export function ContainerActions({ c, refresh, onLogs, onInspect }: { c: Contain
   const act = (action: 'start' | 'stop' | 'restart' | 'pause' | 'unpause' | 'kill', past: string) =>
     run(() => api.containerAction(c.id, action), { success: `${c.name} ${past}`, after: refresh, key: `${c.id}:${action}` });
   const busy = (a: string) => isBusy(`${c.id}:${a}`);
+  const live = c.state === 'running' || c.state === 'restarting' || c.state === 'paused';
   const remove = () =>
-    run(() => api.removeContainer(c.id, c.state !== 'exited' && c.state !== 'created'), {
-      confirm: {
-        title: `Remove ${c.name}?`,
-        body: (
-          <p>
-            The container and its writable layer are deleted. Named volumes are kept.
-            {c.state === 'running' && ' It is running and will be stopped first.'}
-          </p>
-        ),
-        confirmLabel: 'Remove',
-        danger: true,
+    run(
+      async () => {
+        // Stop gracefully (SIGTERM, then the stop timeout) before removing,
+        // rather than letting a forced remove SIGKILL the process.
+        if (live) await api.containerAction(c.id, 'stop');
+        return api.removeContainer(c.id, c.state === 'dead');
       },
-      success: `${c.name} removed`,
-      after: refresh,
-    });
+      {
+        confirm: {
+          title: `Remove ${c.name}?`,
+          body: (
+            <p>
+              The container and its writable layer are deleted. Named volumes are kept.
+              {live && ' It is running, so it is stopped gracefully first; removal waits for it to exit.'}
+            </p>
+          ),
+          confirmLabel: 'Remove',
+          danger: true,
+        },
+        success: `${c.name} removed`,
+        after: refresh,
+      },
+    );
   return (
     <>
       <Button onClick={onLogs}>Logs</Button>

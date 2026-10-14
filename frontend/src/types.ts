@@ -135,6 +135,8 @@ export interface RegistryResponse {
   configured: boolean;
   host?: string;
   tags: RegistryTag[];
+  /** Repositories that could not be read completely. */
+  problems?: string[] | null;
 }
 
 export interface PruneReport {

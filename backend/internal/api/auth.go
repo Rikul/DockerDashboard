@@ -25,6 +25,31 @@ func (s *Server) sessionValue() string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
+// checkToken compares a candidate token against the configured one. Every
+// path that accepts the raw token (login and bearer auth) goes through here,
+// so guessing is slowed down the same way whichever endpoint is used: after
+// repeated failures, each attempt waits before answering.
+func (s *Server) checkToken(candidate string) bool {
+	s.loginMu.Lock()
+	if time.Since(s.loginLastFail) > 15*time.Minute {
+		s.loginFailures = 0
+	}
+	delay := time.Duration(min(s.loginFailures, 10)) * 500 * time.Millisecond
+	s.loginMu.Unlock()
+	time.Sleep(delay)
+
+	ok := equal(candidate, s.cfg.Token)
+	s.loginMu.Lock()
+	if ok {
+		s.loginFailures = 0
+	} else {
+		s.loginFailures++
+		s.loginLastFail = time.Now()
+	}
+	s.loginMu.Unlock()
+	return ok
+}
+
 func equal(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
 
 // authState reports whether r is signed in, and how.
@@ -33,7 +58,7 @@ func (s *Server) authState(r *http.Request) (ok, bearer bool) {
 		return true, false
 	}
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		return equal(strings.TrimPrefix(h, "Bearer "), s.cfg.Token), true
+		return s.checkToken(strings.TrimPrefix(h, "Bearer ")), true
 	}
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		return equal(c.Value, s.sessionValue()), false
@@ -100,26 +125,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	// Slow down guessing: after repeated failures, wait before answering.
-	s.loginMu.Lock()
-	if time.Since(s.loginLastFail) > 15*time.Minute {
-		s.loginFailures = 0
-	}
-	delay := time.Duration(min(s.loginFailures, 10)) * 500 * time.Millisecond
-	s.loginMu.Unlock()
-	time.Sleep(delay)
-
-	if !equal(body.Token, s.cfg.Token) {
-		s.loginMu.Lock()
-		s.loginFailures++
-		s.loginLastFail = time.Now()
-		s.loginMu.Unlock()
+	if !s.checkToken(body.Token) {
 		writeError(w, http.StatusUnauthorized, "wrong token")
 		return
 	}
-	s.loginMu.Lock()
-	s.loginFailures = 0
-	s.loginMu.Unlock()
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    s.sessionValue(),

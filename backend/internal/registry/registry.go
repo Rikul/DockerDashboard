@@ -23,9 +23,13 @@ type Config struct {
 	URL      string // e.g. https://registry.example.com
 	Username string
 	Password string
-	// MaxRepos and MaxTags bound how much one listing reads.
-	MaxRepos int
-	MaxTags  int
+	// MaxRepos and MaxTags bound how much one listing reads: the newest
+	// MaxTags tags (by image creation time) of each of MaxRepos repositories.
+	// Ranking by creation time means reading each tag's manifest, so at most
+	// MaxScanTags tags per repository are examined.
+	MaxRepos    int
+	MaxTags     int
+	MaxScanTags int
 }
 
 // Client talks to one registry.
@@ -38,8 +42,15 @@ type Client struct {
 	tokens map[string]string // scope -> bearer token
 
 	cacheMu  sync.Mutex
-	cache    []Tag
+	cache    Listing
 	cachedAt time.Time
+}
+
+// Listing is what List returns: the tags, plus any repository that could not
+// be read completely, so a partial listing is never mistaken for a full one.
+type Listing struct {
+	Tags     []Tag    `json:"tags"`
+	Problems []string `json:"problems,omitempty"`
 }
 
 // Tag is one tag of one repository, as the dashboard shows it.
@@ -72,6 +83,9 @@ func New(cfg Config) (*Client, error) {
 	}
 	if cfg.MaxTags <= 0 {
 		cfg.MaxTags = 25
+	}
+	if cfg.MaxScanTags < cfg.MaxTags {
+		cfg.MaxScanTags = max(200, cfg.MaxTags)
 	}
 	return &Client{cfg: cfg, base: u, http: &http.Client{Timeout: 30 * time.Second}, tokens: map[string]string{}}, nil
 }
@@ -220,12 +234,42 @@ func parseChallenge(s string) map[string]string {
 }
 
 func (c *Client) getJSON(ctx context.Context, path, scope string, out any) error {
+	_, err := c.getJSONPage(ctx, path, scope, out)
+	return err
+}
+
+// getJSONPage is getJSON for paginated endpoints: it also returns the path of
+// the next page from the Link header, or "" on the last page.
+func (c *Client) getJSONPage(ctx context.Context, path, scope string, out any) (string, error) {
 	resp, err := c.request(ctx, http.MethodGet, path, scope, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
-	return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out); err != nil {
+		return "", err
+	}
+	return nextLink(resp.Header.Get("Link")), nil
+}
+
+// nextLink extracts the path and query of a `<url>; rel="next"` Link header.
+func nextLink(h string) string {
+	for _, part := range strings.Split(h, ",") {
+		target, params, ok := strings.Cut(strings.TrimSpace(part), ";")
+		if !ok || !strings.Contains(strings.ReplaceAll(params, " ", ""), `rel="next"`) {
+			continue
+		}
+		target = strings.TrimSpace(target)
+		if !strings.HasPrefix(target, "<") || !strings.HasSuffix(target, ">") {
+			continue
+		}
+		u, err := url.Parse(target[1 : len(target)-1])
+		if err != nil || u.Path == "" {
+			continue
+		}
+		return u.RequestURI()
+	}
+	return ""
 }
 
 // Repositories lists repository names (GET /v2/_catalog).
@@ -237,13 +281,59 @@ func (c *Client) Repositories(ctx context.Context) ([]string, error) {
 	return out.Repositories, err
 }
 
-// Tags lists a repository's tags, newest-sorting names last.
+// Tags lists all of a repository's tags, following the registry's
+// pagination (Link: <...>; rel="next").
 func (c *Client) Tags(ctx context.Context, repo string) ([]string, error) {
-	var out struct {
-		Tags []string `json:"tags"`
+	var all []string
+	path := "/v2/" + repo + "/tags/list"
+	for page := 0; path != ""; page++ {
+		if page >= 1000 {
+			return all, fmt.Errorf("registry: %s: too many tag pages", repo)
+		}
+		var out struct {
+			Tags []string `json:"tags"`
+		}
+		next, err := c.getJSONPage(ctx, path, "repository:"+repo+":pull", &out)
+		if err != nil {
+			return all, err
+		}
+		all = append(all, out.Tags...)
+		path = next
 	}
-	err := c.getJSON(ctx, "/v2/"+repo+"/tags/list", "repository:"+repo+":pull", &out)
-	return out.Tags, err
+	return all, nil
+}
+
+// versionLess orders tag names so that numeric runs compare as numbers
+// ("v9" < "v10"), which approximates release order far better than plain
+// lexical order when there are too many tags to read every manifest.
+func versionLess(a, b string) bool {
+	for a != "" && b != "" {
+		da, db := digitPrefix(a), digitPrefix(b)
+		if da > 0 && db > 0 {
+			na, nb := strings.TrimLeft(a[:da], "0"), strings.TrimLeft(b[:db], "0")
+			if len(na) != len(nb) {
+				return len(na) < len(nb)
+			}
+			if na != nb {
+				return na < nb
+			}
+			a, b = a[da:], b[db:]
+			continue
+		}
+		if a[0] != b[0] {
+			return a[0] < b[0]
+		}
+		a, b = a[1:], b[1:]
+	}
+	return len(a) < len(b)
+}
+
+func digitPrefix(s string) int {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	return i
 }
 
 type descriptor struct {
@@ -324,33 +414,42 @@ func (c *Client) Describe(ctx context.Context, repo, tag string) Tag {
 	return t
 }
 
-// List describes every tag (bounded by MaxRepos / MaxTags), cached for ttl.
-func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) ([]Tag, error) {
+// List describes the newest MaxTags tags of each repository (bounded by
+// MaxRepos), cached for ttl. Recency comes from each image's creation time,
+// so tags are described before they are ranked and truncated.
+func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Listing, error) {
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
-	if !refresh && c.cache != nil && time.Since(c.cachedAt) < ttl {
+	if !refresh && c.cache.Tags != nil && time.Since(c.cachedAt) < ttl {
 		return c.cache, nil
 	}
 	repos, err := c.Repositories(ctx)
 	if err != nil {
-		return nil, err
+		return Listing{}, err
 	}
+	var problems []string
+	complete := true
 	type job struct{ repo, tag string }
 	var jobs []job
 	for _, r := range repos {
 		tags, err := c.Tags(ctx, r)
 		if err != nil {
-			continue
+			problems = append(problems, fmt.Sprintf("%s: could not list tags: %v", r, err))
+			complete = false
+			if len(tags) == 0 {
+				continue
+			}
 		}
-		sort.Sort(sort.Reverse(sort.StringSlice(tags)))
-		if len(tags) > c.cfg.MaxTags {
-			tags = tags[:c.cfg.MaxTags]
+		if len(tags) > c.cfg.MaxScanTags {
+			problems = append(problems, fmt.Sprintf("%s: %d tags; only the %d highest-versioned were checked for recency", r, len(tags), c.cfg.MaxScanTags))
+			sort.Slice(tags, func(i, j int) bool { return versionLess(tags[j], tags[i]) })
+			tags = tags[:c.cfg.MaxScanTags]
 		}
 		for _, t := range tags {
 			jobs = append(jobs, job{r, t})
 		}
 	}
-	out := make([]Tag, len(jobs))
+	described := make([]Tag, len(jobs))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
 	for i, j := range jobs {
@@ -359,12 +458,38 @@ func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) ([]T
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			out[i] = c.Describe(ctx, j.repo, j.tag)
+			described[i] = c.Describe(ctx, j.repo, j.tag)
 		}()
 	}
 	wg.Wait()
-	c.cache, c.cachedAt = out, time.Now()
-	return out, nil
+
+	// Newest first within each repository (ties and unknown times fall back
+	// to version order), then keep MaxTags per repository.
+	sort.SliceStable(described, func(i, j int) bool {
+		a, b := described[i], described[j]
+		if a.Repository != b.Repository {
+			return a.Repository < b.Repository
+		}
+		if !a.Created.Equal(b.Created) {
+			return a.Created.After(b.Created)
+		}
+		return versionLess(b.Tag, a.Tag)
+	})
+	out := make([]Tag, 0, len(described))
+	perRepo := map[string]int{}
+	for _, t := range described {
+		if perRepo[t.Repository] < c.cfg.MaxTags {
+			out = append(out, t)
+		}
+		perRepo[t.Repository]++
+	}
+	l := Listing{Tags: out, Problems: problems}
+	// A listing hit by a failed request is returned (with its problems) but
+	// not cached, so the next poll retries instead of serving it for the ttl.
+	if complete {
+		c.cache, c.cachedAt = l, time.Now()
+	}
+	return l, nil
 }
 
 // DeleteTag deletes the manifest a tag points at. Every tag sharing that
@@ -386,7 +511,7 @@ func (c *Client) DeleteTag(ctx context.Context, repo, tag string) error {
 	}
 	resp.Body.Close()
 	c.cacheMu.Lock()
-	c.cache = nil
+	c.cache = Listing{}
 	c.cacheMu.Unlock()
 	return nil
 }
