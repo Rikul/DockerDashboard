@@ -40,7 +40,18 @@ export function LogViewer({ id, name, onClose }: { id: string; name: string; onC
         return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
       });
     };
-    es.onopen = () => setStatus('live');
+    // After a dropped connection EventSource reconnects by itself, and the
+    // server replays the last `tail` lines, so start over instead of
+    // appending them a second time.
+    let opened = false;
+    es.onopen = () => {
+      if (opened) {
+        buf = [];
+        setLines([]);
+      }
+      opened = true;
+      setStatus('live');
+    };
     es.onmessage = (e) => {
       try {
         buf.push(JSON.parse(e.data) as LogLine);

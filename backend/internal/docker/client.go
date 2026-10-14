@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,10 @@ type Client struct {
 	// stream has no overall timeout, for logs and pull progress.
 	stream *http.Client
 	base   string // e.g. "http://docker" or "http://10.0.0.5:2375"
+
+	apiMu    sync.Mutex
+	apiVer   string // daemon API version as reported, once known
+	apiKnown bool
 }
 
 // Error is a non-2xx response from the daemon.
@@ -342,15 +347,53 @@ func (c *Client) RemoveVolume(ctx context.Context, name string, force bool) erro
 	return c.call(ctx, http.MethodDelete, "/volumes/"+url.PathEscape(name), url.Values{"force": {boolStr(force)}}, nil, nil)
 }
 
+// apiVersion returns the daemon's API version, asking once and remembering
+// the answer (a failed ask is retried next time).
+func (c *Client) apiVersion(ctx context.Context) (string, error) {
+	c.apiMu.Lock()
+	defer c.apiMu.Unlock()
+	if !c.apiKnown {
+		v, err := c.Version(ctx)
+		if err != nil {
+			return "", err
+		}
+		c.apiVer, c.apiKnown = v.APIVersion, true
+	}
+	return c.apiVer, nil
+}
+
+// apiBefore reports whether API version v is known to be older than
+// major.minor. An unparseable version is not known to be older.
+func apiBefore(v string, major, minor int) bool {
+	var ma, mi int
+	if _, err := fmt.Sscanf(v, "%d.%d", &ma, &mi); err != nil {
+		return false
+	}
+	return ma < major || ma == major && mi < minor
+}
+
 // PruneVolumes removes unused volumes. With all=false only anonymous ones
 // are removed (the Docker 23+ default); all=true includes named volumes.
+// Daemons before API 1.42 don't know the "all" filter but already prune
+// named volumes, so there all=true sends no filter (and all=false is
+// refused, since it can't be honoured).
 func (c *Client) PruneVolumes(ctx context.Context, all bool) (PruneReport, error) {
 	var out PruneReport
-	q := url.Values{}
-	if all {
-		q.Set("filters", `{"all":["true"]}`)
+	ver, err := c.apiVersion(ctx)
+	if err != nil {
+		return out, err
 	}
-	err := c.call(ctx, http.MethodPost, "/volumes/prune", q, nil, &out)
+	// If the version can't be read, send the filter: older daemons ignore
+	// unknown filters and prune named volumes anyway.
+	modern := !apiBefore(ver, 1, 42)
+	q := url.Values{}
+	switch {
+	case all && modern:
+		q.Set("filters", `{"all":["true"]}`)
+	case !all && !modern:
+		return out, &Error{StatusCode: http.StatusBadRequest, Message: "this Docker version (API " + ver + ") always prunes named volumes too; use all=true"}
+	}
+	err = c.call(ctx, http.MethodPost, "/volumes/prune", q, nil, &out)
 	return out, err
 }
 
@@ -359,13 +402,6 @@ func (c *Client) PruneVolumes(ctx context.Context, all bool) (PruneReport, error
 func (c *Client) ListNetworks(ctx context.Context) ([]Network, error) {
 	var out []Network
 	err := c.call(ctx, http.MethodGet, "/networks", nil, nil, &out)
-	return out, err
-}
-
-// InspectNetwork includes the attached containers, which the list omits.
-func (c *Client) InspectNetwork(ctx context.Context, id string) (Network, error) {
-	var out Network
-	err := c.call(ctx, http.MethodGet, "/networks/"+url.PathEscape(id), nil, nil, &out)
 	return out, err
 }
 

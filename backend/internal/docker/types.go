@@ -140,10 +140,6 @@ type Network struct {
 	IPAM     struct {
 		Config []IPAMConfig `json:"Config"`
 	} `json:"IPAM"`
-	Containers map[string]struct {
-		Name        string `json:"Name"`
-		IPv4Address string `json:"IPv4Address"`
-	} `json:"Containers"`
 	Labels map[string]string `json:"Labels"`
 }
 

@@ -681,38 +681,37 @@ func (s *Server) handleNetworks(w http.ResponseWriter, r *http.Request) {
 		dockerError(w, err)
 		return
 	}
-	out := make([]NetworkView, len(nets))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
-	for i, n := range nets {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			if full, err := s.docker.InspectNetwork(ctx, n.ID); err == nil {
-				n = full
-			}
-			v := NetworkView{
-				ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Internal: n.Internal,
-				Containers: []string{}, Builtin: builtinNetworks[n.Name], Project: n.Labels[projectLabel],
-			}
-			if len(n.IPAM.Config) > 0 {
-				v.Subnet, v.Gateway = n.IPAM.Config[0].Subnet, n.IPAM.Config[0].Gateway
-			}
-			if t, err := time.Parse(time.RFC3339Nano, n.Created); err == nil {
-				v.Created = t.UTC()
-			}
-			for _, c := range n.Containers {
-				if c.Name != "" {
-					v.Containers = append(v.Containers, c.Name)
-				}
-			}
-			sort.Strings(v.Containers)
-			out[i] = v
-		}()
+	// Attached containers come from one container list, rather than an
+	// inspect per network on every poll.
+	cs, err := s.docker.ListContainers(ctx, true)
+	if err != nil {
+		dockerError(w, err)
+		return
 	}
-	wg.Wait()
+	members := map[string][]string{} // network id -> container names
+	for _, c := range cs {
+		for _, ep := range c.NetworkSettings.Networks {
+			if ep.NetworkID != "" {
+				members[ep.NetworkID] = append(members[ep.NetworkID], stats.Name(c.Names))
+			}
+		}
+	}
+	out := make([]NetworkView, len(nets))
+	for i, n := range nets {
+		v := NetworkView{
+			ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Internal: n.Internal,
+			Containers: []string{}, Builtin: builtinNetworks[n.Name], Project: n.Labels[projectLabel],
+		}
+		if len(n.IPAM.Config) > 0 {
+			v.Subnet, v.Gateway = n.IPAM.Config[0].Subnet, n.IPAM.Config[0].Gateway
+		}
+		if t, err := time.Parse(time.RFC3339Nano, n.Created); err == nil {
+			v.Created = t.UTC()
+		}
+		v.Containers = append(v.Containers, members[n.ID]...)
+		sort.Strings(v.Containers)
+		out[i] = v
+	}
 	sort.Slice(out, func(a, b int) bool { return out[a].Name < out[b].Name })
 	writeJSON(w, http.StatusOK, out)
 }
@@ -814,8 +813,11 @@ func (s *Server) handleRegistryDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.registry.DeleteTag(r.Context(), repo, tag); err != nil {
 		status := http.StatusBadGateway
-		if errors.Is(err, registry.ErrNotFound) {
+		switch {
+		case errors.Is(err, registry.ErrNotFound):
 			status = http.StatusNotFound
+		case errors.Is(err, registry.ErrInvalidName):
+			status = http.StatusBadRequest
 		}
 		writeError(w, status, err.Error())
 		return

@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { api } from '../api';
 import { useActions } from '../actions';
 import { DataTable, type Column } from '../components/DataTable';
@@ -8,7 +9,15 @@ import type { RegistryTag } from '../types';
 
 export function RegistryPage({ onPulled }: { onPulled: () => void }) {
   const { run, toast, readOnly, isBusy } = useActions();
-  const poll = usePoll(() => api.registry(), 60_000);
+  // Refresh asks the server to bypass its cache on the next fetch, so one
+  // request does it (rather than a forced read whose result is thrown away
+  // followed by a normal one).
+  const force = useRef(false);
+  const poll = usePoll(() => {
+    const refresh = force.current;
+    force.current = false;
+    return api.registry(refresh);
+  }, 60_000);
   const data = poll.data;
 
   if (data && !data.configured) {
@@ -110,7 +119,7 @@ REGISTRY_PASSWORD=…                 # optional, or a token`}</pre>
                           danger: true,
                         },
                         success: `Deleted ${t.repository}:${t.tag}`,
-                        after: () => api.registry(true).then(() => poll.refresh()),
+                        after: poll.refresh, // a delete clears the server's cache
                       })
                     }
                   >
@@ -121,7 +130,13 @@ REGISTRY_PASSWORD=…                 # optional, or a token`}</pre>
             </>
           )}
           toolbar={
-            <Button onClick={() => run(() => api.registry(true), { after: () => poll.refresh() })} title="Re-read the registry (it is cached for a minute)">
+            <Button
+              onClick={() => {
+                force.current = true;
+                return run(() => poll.refresh());
+              }}
+              title="Re-read the registry (it is cached for a minute)"
+            >
               Refresh
             </Button>
           }

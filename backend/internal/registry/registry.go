@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -42,10 +43,14 @@ type Client struct {
 	mu     sync.Mutex
 	tokens map[string]string // scope -> bearer token
 
-	cacheMu       sync.Mutex
+	cacheMu sync.Mutex
+	// scanMu lets one listing scan run at a time; cacheMu only guards the
+	// fields below, so it is never held across network calls.
+	scanMu        sync.Mutex
 	cache         Listing
 	cachedAt      time.Time
 	cacheComplete bool
+	cacheGen      uint64 // bumped when the cache is invalidated
 }
 
 // failedListingTTL is how long an incomplete listing is served from cache
@@ -168,7 +173,11 @@ func (c *Client) fetchToken(ctx context.Context, challenge, scope string) error 
 	if realm == "" {
 		return fmt.Errorf("registry: bearer challenge without realm")
 	}
-	q := url.Values{}
+	u, err := url.Parse(realm)
+	if err != nil {
+		return fmt.Errorf("registry: bad token realm %q: %w", realm, err)
+	}
+	q := u.Query() // keep any parameters the realm already carries
 	if s := params["service"]; s != "" {
 		q.Set("service", s)
 	}
@@ -177,7 +186,8 @@ func (c *Client) fetchToken(ctx context.Context, challenge, scope string) error 
 	} else if s := params["scope"]; s != "" {
 		q.Set("scope", s)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, realm+"?"+q.Encode(), nil)
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return err
 	}
@@ -255,10 +265,21 @@ func (c *Client) getJSONPage(ctx context.Context, path, scope string, out any) (
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out); err != nil {
 		return "", err
 	}
-	return nextLink(resp.Header.Get("Link")), nil
+	next := nextLink(resp.Header.Get("Link"))
+	if next == "" {
+		return "", nil
+	}
+	// Credentials go with every request, so only follow a link back to the
+	// same endpoint on the configured host; it may only change the query.
+	u, err := url.Parse(next)
+	pagePath, _, _ := strings.Cut(path, "?")
+	if err != nil || (u.Host != "" && u.Host != c.base.Host) || u.Path != pagePath {
+		return "", fmt.Errorf("registry: refusing pagination link %q for %s", next, pagePath)
+	}
+	return pagePath + "?" + u.RawQuery, nil
 }
 
-// nextLink extracts the path and query of a `<url>; rel="next"` Link header.
+// nextLink extracts the URL of a `<url>; rel="next"` Link header.
 func nextLink(h string) string {
 	for _, part := range strings.Split(h, ",") {
 		target, params, ok := strings.Cut(strings.TrimSpace(part), ";")
@@ -269,22 +290,50 @@ func nextLink(h string) string {
 		if !strings.HasPrefix(target, "<") || !strings.HasSuffix(target, ">") {
 			continue
 		}
-		u, err := url.Parse(target[1 : len(target)-1])
-		if err != nil || u.Path == "" {
-			continue
-		}
-		return u.RequestURI()
+		return target[1 : len(target)-1]
 	}
 	return ""
 }
 
 // Repositories lists repository names (GET /v2/_catalog).
 func (c *Client) Repositories(ctx context.Context) ([]string, error) {
-	var out struct {
+	repos, _, err := c.repositories(ctx)
+	return repos, err
+}
+
+// repositories reads the catalog, following its pagination, up to MaxRepos
+// names. more reports whether the registry has further repositories.
+func (c *Client) repositories(ctx context.Context) (repos []string, more bool, err error) {
+	type page struct {
 		Repositories []string `json:"repositories"`
 	}
-	err := c.getJSON(ctx, fmt.Sprintf("/v2/_catalog?n=%d", c.cfg.MaxRepos), "registry:catalog:*", &out)
-	return out.Repositories, err
+	path := fmt.Sprintf("/v2/_catalog?n=%d", c.cfg.MaxRepos)
+	for n := 0; path != ""; n++ {
+		if n >= 1000 {
+			return repos, true, nil
+		}
+		var out page
+		next, err := c.getJSONPage(ctx, path, "registry:catalog:*", &out)
+		if err != nil {
+			return repos, false, err
+		}
+		repos = append(repos, out.Repositories...)
+		path = next
+		switch {
+		case len(repos) > c.cfg.MaxRepos:
+			return repos[:c.cfg.MaxRepos], true, nil
+		case len(repos) == c.cfg.MaxRepos && path != "":
+			// Exactly full, and the registry offers another page: some
+			// send a link even on their last page, so look before
+			// reporting that repositories were left out.
+			var peek page
+			if _, err := c.getJSONPage(ctx, path, "registry:catalog:*", &peek); err != nil {
+				return repos, true, nil
+			}
+			return repos, len(peek.Repositories) > 0, nil
+		}
+	}
+	return repos, false, nil
 }
 
 // Tags lists all of a repository's tags, following the registry's
@@ -436,24 +485,64 @@ func (c *Client) describe(ctx context.Context, repo, tag string) (Tag, error) {
 // MaxRepos), cached for ttl. Recency comes from each image's creation time,
 // so tags are described before they are ranked and truncated.
 func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Listing, error) {
-	c.cacheMu.Lock()
-	defer c.cacheMu.Unlock()
-	if !refresh && c.cache.Tags != nil {
-		// An incomplete listing is kept briefly, so a struggling registry
-		// isn't rescanned on every request, but retried well before ttl.
-		keep := ttl
-		if !c.cacheComplete {
-			keep = min(ttl, failedListingTTL)
-		}
-		if time.Since(c.cachedAt) < keep {
-			return c.cache, nil
-		}
+	asked := time.Now()
+	if l, ok := c.cached(ttl, refresh, asked); ok {
+		return l, nil
 	}
-	repos, err := c.Repositories(ctx)
+	// One scan at a time. Whoever waited here re-checks the cache, so
+	// concurrent requests share the scan that just finished.
+	c.scanMu.Lock()
+	defer c.scanMu.Unlock()
+	if l, ok := c.cached(ttl, refresh, asked); ok {
+		return l, nil
+	}
+	c.cacheMu.Lock()
+	gen := c.cacheGen
+	c.cacheMu.Unlock()
+	l, complete, err := c.scan(ctx)
 	if err != nil {
 		return Listing{}, err
 	}
+	c.cacheMu.Lock()
+	// A delete during the scan invalidated what was read; don't cache it.
+	if c.cacheGen == gen {
+		c.cache, c.cachedAt, c.cacheComplete = l, time.Now(), complete
+	}
+	c.cacheMu.Unlock()
+	return l, nil
+}
+
+// cached returns the cached listing if it may be served. With refresh, only
+// a listing made after asked (by a scan this request waited for) counts.
+func (c *Client) cached(ttl time.Duration, refresh bool, asked time.Time) (Listing, bool) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	if c.cache.Tags == nil {
+		return Listing{}, false
+	}
+	if refresh {
+		return c.cache, c.cachedAt.After(asked)
+	}
+	// An incomplete listing is kept briefly, so a struggling registry
+	// isn't rescanned on every request, but retried well before ttl.
+	keep := ttl
+	if !c.cacheComplete {
+		keep = min(ttl, failedListingTTL)
+	}
+	return c.cache, time.Since(c.cachedAt) < keep
+}
+
+// scan reads the registry. complete is false when a request failed in a
+// way that may succeed on retry.
+func (c *Client) scan(ctx context.Context) (Listing, bool, error) {
+	repos, more, err := c.repositories(ctx)
+	if err != nil {
+		return Listing{}, false, err
+	}
 	var problems []string
+	if more {
+		problems = append(problems, fmt.Sprintf("the registry has more than %d repositories; only the first %d are listed", c.cfg.MaxRepos, c.cfg.MaxRepos))
+	}
 	complete := true
 	type job struct{ repo, tag string }
 	var jobs []job
@@ -496,7 +585,7 @@ func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Lis
 	}
 	wg.Wait()
 	if err := ctx.Err(); err != nil {
-		return Listing{}, err // the caller gave up; don't serve or cache a half-read listing
+		return Listing{}, false, err // the caller gave up; don't serve or cache a half-read listing
 	}
 	if failed.Load() {
 		complete = false
@@ -523,19 +612,16 @@ func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Lis
 		}
 		perRepo[t.Repository]++
 	}
-	l := Listing{Tags: out, Problems: problems}
-	// A listing hit by a failed request is returned (with its problems) but
-	// not cached, so the next poll retries instead of serving it for the ttl.
-	// An incomplete listing replaces any older one (which must not stand in
-	// for it) and is only kept for failedListingTTL.
-	c.cache, c.cachedAt, c.cacheComplete = l, time.Now(), complete
-	return l, nil
+	return Listing{Tags: out, Problems: problems}, complete, nil
 }
 
 // DeleteTag deletes the manifest a tag points at. Every tag sharing that
 // digest goes with it, and the registry must allow deletes
 // (REGISTRY_STORAGE_DELETE_ENABLED=true on distribution).
 func (c *Client) DeleteTag(ctx context.Context, repo, tag string) error {
+	if !repoNameRe.MatchString(repo) || !tagRe.MatchString(tag) {
+		return fmt.Errorf("%w: %q:%q", ErrInvalidName, repo, tag)
+	}
 	resp, err := c.request(ctx, http.MethodHead, "/v2/"+repo+"/manifests/"+tag, "repository:"+repo+":pull,delete", http.Header{"Accept": {manifestAccept}})
 	if err != nil {
 		return err
@@ -552,6 +638,17 @@ func (c *Client) DeleteTag(ctx context.Context, repo, tag string) error {
 	resp.Body.Close()
 	c.cacheMu.Lock()
 	c.cache = Listing{}
+	c.cacheGen++
 	c.cacheMu.Unlock()
 	return nil
 }
+
+// ErrInvalidName is returned for a repository or tag name that isn't valid
+// in the distribution spec, so it can't be spliced into a registry URL.
+var ErrInvalidName = errors.New("registry: invalid repository or tag name")
+
+// The distribution spec's grammar for repository names and tags.
+var (
+	repoNameRe = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$`)
+	tagRe      = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`)
+)
