@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -370,13 +371,20 @@ func (c *Client) manifest(ctx context.Context, repo, ref string) (manifest, stri
 	return m, resp.Header.Get("Docker-Content-Digest"), nil
 }
 
-// Describe reads one tag's manifest, size and creation time.
+// Describe reads one tag's manifest, size and creation time. A failure is
+// recorded in the returned Tag's Error.
 func (c *Client) Describe(ctx context.Context, repo, tag string) Tag {
+	t, _ := c.describe(ctx, repo, tag)
+	return t
+}
+
+// describe is Describe that also returns the error it recorded, if any.
+func (c *Client) describe(ctx context.Context, repo, tag string) (Tag, error) {
 	t := Tag{Ref: c.base.Host + "/" + repo + ":" + tag, Repository: repo, Tag: tag}
 	m, digest, err := c.manifest(ctx, repo, tag)
 	if err != nil {
 		t.Error = err.Error()
-		return t
+		return t, err
 	}
 	t.Digest, t.MediaType = digest, m.MediaType
 	if len(m.Manifests) > 0 { // multi-platform: describe linux/amd64, else the first
@@ -396,7 +404,7 @@ func (c *Client) Describe(ctx context.Context, repo, tag string) Tag {
 		}
 		if m, _, err = c.manifest(ctx, repo, pick.Digest); err != nil {
 			t.Error = err.Error()
-			return t
+			return t, err
 		}
 	}
 	t.Size = m.Config.Size
@@ -411,7 +419,7 @@ func (c *Client) Describe(ctx context.Context, repo, tag string) Tag {
 			t.Created = cfg.Created
 		}
 	}
-	return t
+	return t, nil
 }
 
 // List describes the newest MaxTags tags of each repository (bounded by
@@ -450,6 +458,7 @@ func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Lis
 		}
 	}
 	described := make([]Tag, len(jobs))
+	var failed atomic.Bool
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
 	for i, j := range jobs {
@@ -458,10 +467,23 @@ func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Lis
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			described[i] = c.Describe(ctx, j.repo, j.tag)
+			var err error
+			described[i], err = c.describe(ctx, j.repo, j.tag)
+			// A tag deleted since it was listed is permanent; anything else
+			// (timeouts, 5xx, auth hiccups) may clear on the next try.
+			if err != nil && !errors.Is(err, ErrNotFound) {
+				failed.Store(true)
+			}
 		}()
 	}
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return Listing{}, err // the caller gave up; don't serve or cache a half-read listing
+	}
+	if failed.Load() {
+		complete = false
+		problems = append(problems, "some tags could not be read; they are marked unreadable and will be retried")
+	}
 
 	// Newest first within each repository (ties and unknown times fall back
 	// to version order), then keep MaxTags per repository.

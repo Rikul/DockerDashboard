@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,29 +27,85 @@ func (s *Server) sessionValue() string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// checkToken compares a candidate token against the configured one. Every
-// path that accepts the raw token (login and bearer auth) goes through here,
-// so guessing is slowed down the same way whichever endpoint is used: after
-// repeated failures, each attempt waits before answering.
-func (s *Server) checkToken(candidate string) bool {
-	s.loginMu.Lock()
-	if time.Since(s.loginLastFail) > 15*time.Minute {
-		s.loginFailures = 0
-	}
-	delay := time.Duration(min(s.loginFailures, 10)) * 500 * time.Millisecond
-	s.loginMu.Unlock()
-	time.Sleep(delay)
+// Guessing the token is slowed down per client address: after repeated
+// failures from one address, each further attempt from it waits before it is
+// answered, and attempts from one address are checked one at a time so
+// sending many in parallel does not get around the wait. Other clients, and
+// successful requests elsewhere, neither reset nor inherit that wait.
+var failStep = 500 * time.Millisecond // a var so tests can shorten it
 
-	ok := equal(candidate, s.cfg.Token)
+const (
+	failWindow   = 15 * time.Minute
+	maxFailSteps = 10
+	maxTracked   = 4096 // addresses remembered before old entries are pruned
+)
+
+type attempts struct {
+	mu       sync.Mutex // held for the whole check, serializing one address
+	failures int
+	lastFail time.Time
+}
+
+func (s *Server) attemptsFor(addr string) *attempts {
 	s.loginMu.Lock()
-	if ok {
-		s.loginFailures = 0
-	} else {
-		s.loginFailures++
-		s.loginLastFail = time.Now()
+	defer s.loginMu.Unlock()
+	if s.loginAttempts == nil {
+		s.loginAttempts = map[string]*attempts{}
 	}
-	s.loginMu.Unlock()
-	return ok
+	a := s.loginAttempts[addr]
+	if a == nil {
+		if len(s.loginAttempts) >= maxTracked {
+			for k, v := range s.loginAttempts {
+				if v.mu.TryLock() {
+					stale := time.Since(v.lastFail) > failWindow
+					v.mu.Unlock()
+					if stale {
+						delete(s.loginAttempts, k)
+					}
+				}
+			}
+		}
+		a = &attempts{}
+		s.loginAttempts[addr] = a
+	}
+	return a
+}
+
+// clientAddr is the address failures are counted against. It is the TCP
+// peer: X-Forwarded-For is not trusted, since any client can set it.
+func clientAddr(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// checkToken compares a candidate token against the configured one. Every
+// path that accepts the raw token (login and bearer auth) goes through here.
+func (s *Server) checkToken(r *http.Request, candidate string) bool {
+	a := s.attemptsFor(clientAddr(r))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if time.Since(a.lastFail) > failWindow {
+		a.failures = 0
+	}
+	if a.failures > 0 {
+		t := time.NewTimer(time.Duration(min(a.failures, maxFailSteps)) * failStep)
+		select {
+		case <-t.C:
+		case <-r.Context().Done():
+			t.Stop()
+			return false
+		}
+	}
+	if equal(candidate, s.cfg.Token) {
+		a.failures = 0
+		return true
+	}
+	a.failures++
+	a.lastFail = time.Now()
+	return false
 }
 
 func equal(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
@@ -58,7 +116,7 @@ func (s *Server) authState(r *http.Request) (ok, bearer bool) {
 		return true, false
 	}
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		return s.checkToken(strings.TrimPrefix(h, "Bearer ")), true
+		return s.checkToken(r, strings.TrimPrefix(h, "Bearer ")), true
 	}
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		return equal(c.Value, s.sessionValue()), false
@@ -125,7 +183,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if !s.checkToken(body.Token) {
+	if !s.checkToken(r, body.Token) {
 		writeError(w, http.StatusUnauthorized, "wrong token")
 		return
 	}

@@ -52,7 +52,7 @@ Running the backend on its own without building the frontend first serves the AP
 
 - Sign-in is required unless you explicitly set `DASHBOARD_AUTH=none`.
 - The session is an `HttpOnly`, `SameSite=Strict` cookie derived from the token, so the token itself is never stored in the browser. Changing the token signs everyone out.
-- Every write must carry an `X-Requested-With` header, which protects against cross-site requests. Repeated wrong tokens are answered more and more slowly.
+- Every write must carry an `X-Requested-With` header, which protects against cross-site requests. Repeated wrong tokens (at login or as a bearer token) are answered more and more slowly, counted per client address, and one address's attempts are checked one at a time. Behind a reverse proxy every client shares the proxy's address, so they share that slowdown.
 - Responses carry a strict Content-Security-Policy, `X-Frame-Options: DENY` and `nosniff`.
 - Container environment variables are never sent to the browser.
 - Compose binds the port to `127.0.0.1`.

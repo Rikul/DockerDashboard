@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -115,10 +114,10 @@ func run() error {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		// No WriteTimeout: log streams and image pulls are long-lived.
-		// Deriving request contexts from ctx lets those handlers exit as
-		// soon as shutdown begins instead of holding Shutdown open.
-		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
+	// On shutdown, end log streams (they would never finish by themselves)
+	// but let in-flight actions such as a stop or pull complete.
+	httpSrv.RegisterOnShutdown(srv.StopStreams)
 	errc := make(chan error, 1)
 	go func() {
 		slog.Info("listening", "addr", *addr, "read_only", envBool("READ_ONLY"), "registry", os.Getenv("REGISTRY_URL"))
@@ -130,7 +129,12 @@ func run() error {
 	case <-ctx.Done():
 	}
 	slog.Info("shutting down")
-	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Docker's default stop grace period is 10s, so finish within it.
+	shutCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	return httpSrv.Shutdown(shutCtx)
+	if err := httpSrv.Shutdown(shutCtx); err != nil {
+		slog.Warn("requests still running at shutdown were cut off", "err", err)
+		return httpSrv.Close()
+	}
+	return nil
 }

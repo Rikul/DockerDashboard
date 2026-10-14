@@ -171,3 +171,34 @@ func TestVersionLess(t *testing.T) {
 		}
 	}
 }
+
+func TestTransientDescribeFailureIsNotCached(t *testing.T) {
+	fail := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/_catalog":
+			json.NewEncoder(w).Encode(map[string]any{"repositories": []string{"app"}})
+		case r.URL.Path == "/v2/app/tags/list":
+			json.NewEncoder(w).Encode(map[string]any{"tags": []string{"v1"}})
+		case r.URL.Path == "/v2/app/manifests/v1" && fail:
+			w.WriteHeader(503)
+		case r.URL.Path == "/v2/app/manifests/v1":
+			json.NewEncoder(w).Encode(map[string]any{"mediaType": "application/vnd.oci.image.manifest.v1+json"})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	c, _ := New(Config{URL: srv.URL})
+	l, err := c.List(t.Context(), time.Minute, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Tags) != 1 || l.Tags[0].Error == "" || len(l.Problems) == 0 {
+		t.Fatalf("want an unreadable tag and a problem, got %+v", l)
+	}
+	fail = false
+	if l, _ = c.List(t.Context(), time.Minute, false); l.Tags[0].Error != "" {
+		t.Fatalf("the failed listing was cached: %+v", l.Tags[0])
+	}
+}

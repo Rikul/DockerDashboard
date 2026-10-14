@@ -17,36 +17,46 @@ export function usePoll<T>(fetcher: () => Promise<T>, intervalMs: number, enable
   const [loading, setLoading] = useState(true);
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
-  const inflight = useRef(false);
+  const inflight = useRef(0);
+  const latest = useRef(0);
 
-  const refresh = useCallback(async () => {
-    if (inflight.current) return;
-    inflight.current = true;
+  // Interval ticks skip while a fetch is running. An explicit refresh (after
+  // an action) always fetches, and only the newest fetch's result is used,
+  // so a poll that started before the action can't overwrite it with
+  // stale data.
+  const load = useCallback(async (force: boolean) => {
+    if (!force && inflight.current > 0) return;
+    const seq = ++latest.current;
+    inflight.current++;
     try {
       const d = await fetcherRef.current();
-      setData(d);
-      setError(undefined);
+      if (seq === latest.current) {
+        setData(d);
+        setError(undefined);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (seq === latest.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      inflight.current = false;
-      setLoading(false);
+      inflight.current--;
+      if (seq === latest.current) setLoading(false);
     }
   }, []);
+  const refresh = useCallback(() => load(true), [load]);
+  const tick = useCallback(() => load(false), [load]);
 
   useEffect(() => {
     if (!enabled) return;
-    void refresh();
+    void tick();
     let timer: number | undefined;
     const start = () => {
       stop();
-      timer = window.setInterval(() => void refresh(), intervalMs);
+      timer = window.setInterval(() => void tick(), intervalMs);
     };
     const stop = () => window.clearInterval(timer);
     const onVisibility = () => {
       if (document.hidden) stop();
       else {
-        void refresh();
+        void tick();
         start();
       }
     };
@@ -56,7 +66,7 @@ export function usePoll<T>(fetcher: () => Promise<T>, intervalMs: number, enable
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [enabled, intervalMs, refresh]);
+  }, [enabled, intervalMs, tick]);
 
   return { data, error, loading, refresh };
 }

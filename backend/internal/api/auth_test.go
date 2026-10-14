@@ -4,7 +4,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func testServer(cfg Config) http.Handler {
@@ -92,19 +94,50 @@ func TestHealthFromStatus(t *testing.T) {
 	}
 }
 
-func TestBearerFailuresCountTowardThrottling(t *testing.T) {
+func TestThrottlingIsPerClientAndSerialized(t *testing.T) {
+	defer func(d time.Duration) { failStep = d }(failStep)
+	failStep = 40 * time.Millisecond
 	s := &Server{cfg: Config{Token: tok}}
 	h := s.authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	from := func(addr, token string) int {
+		r := httptest.NewRequest("GET", "/api/containers", nil)
+		r.RemoteAddr = addr + ":5555"
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
 	for range 2 {
-		if w := do(h, "GET", "/api/containers", "", map[string]string{"Authorization": "Bearer wrong"}); w.Code != 401 {
-			t.Fatalf("wrong bearer: %d", w.Code)
+		if c := from("198.51.100.7", "wrong"); c != 401 {
+			t.Fatalf("wrong bearer: %d", c)
 		}
 	}
-	if s.loginFailures != 2 {
-		t.Fatalf("bearer failures not counted: %d", s.loginFailures)
+	if n := s.attemptsFor("198.51.100.7").failures; n != 2 {
+		t.Fatalf("bearer failures not counted: %d", n)
 	}
-	if !s.checkToken(tok) || s.loginFailures != 0 {
-		t.Fatalf("a correct token should reset the failure count, got %d", s.loginFailures)
+	// Another client's success neither resets the attacker's count nor
+	// waits behind it.
+	start := time.Now()
+	if c := from("203.0.113.9", tok); c != 200 {
+		t.Fatalf("good bearer: %d", c)
+	}
+	if time.Since(start) > 20*time.Millisecond {
+		t.Fatal("a clean client should not be delayed by another client's failures")
+	}
+	if n := s.attemptsFor("198.51.100.7").failures; n != 2 {
+		t.Fatalf("another client's success reset the count: %d", n)
+	}
+	// Parallel guesses from one address are checked one at a time, so the
+	// waits add up instead of overlapping: 2+3+4 steps at least.
+	start = time.Now()
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Add(1)
+		go func() { defer wg.Done(); from("198.51.100.7", "wrong") }()
+	}
+	wg.Wait()
+	if el := time.Since(start); el < 9*failStep {
+		t.Fatalf("parallel guesses were not serialized: took %v", el)
 	}
 }
 
