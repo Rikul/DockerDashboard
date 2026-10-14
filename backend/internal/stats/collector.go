@@ -40,9 +40,10 @@ type Collector struct {
 	interval time.Duration
 	keep     int // samples kept per container
 
-	mu     sync.RWMutex
-	byID   map[string]*series
-	notify map[chan struct{}]struct{}
+	mu       sync.RWMutex
+	byID     map[string]*series
+	lastTick time.Time // when the latest successful round ran
+	notify   map[chan struct{}]struct{}
 }
 
 // New makes a collector sampling every interval and keeping window of history.
@@ -115,6 +116,7 @@ func (c *Collector) tick(ctx context.Context) {
 	wg.Wait()
 
 	c.mu.Lock()
+	c.lastTick = now
 	for _, r := range out {
 		s := c.byID[r.id]
 		if s == nil {
@@ -185,12 +187,18 @@ type Series struct {
 	Samples []Sample `json:"samples"`
 }
 
-// History returns samples newer than since, busiest containers first.
+// History returns samples newer than since for containers running at the
+// latest round, busiest first. Stopped or removed containers are left out
+// (their series are kept for a while in case they come back under the same
+// id), so a container recreated under the same name is never listed twice.
 func (c *Collector) History(since time.Time) []Series {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	out := make([]Series, 0, len(c.byID))
 	for id, s := range c.byID {
+		if !s.seen.Equal(c.lastTick) {
+			continue
+		}
 		i := sort.Search(len(s.samples), func(i int) bool { return !s.samples[i].Time.Before(since) })
 		if i == len(s.samples) {
 			continue

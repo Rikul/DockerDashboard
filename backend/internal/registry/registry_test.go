@@ -2,10 +2,13 @@ package registry
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -232,5 +235,86 @@ func TestTransientDescribeFailureIsNotCached(t *testing.T) {
 	l, _ = c.List(t.Context(), time.Minute, false)
 	if l.Tags[0].Error != "" || l.Tags[0].Digest == "" && l.Tags[0].Size == 0 || c.cacheComplete {
 		t.Fatalf("want a readable tag in an incomplete listing, got %+v complete=%v", l.Tags[0], c.cacheComplete)
+	}
+}
+
+func TestCatalogPaginationAndTruncation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/_catalog" && r.URL.Query().Get("last") == "":
+			w.Header().Set("Link", `</v2/_catalog?n=2&last=b>; rel="next"`)
+			json.NewEncoder(w).Encode(map[string]any{"repositories": []string{"a", "b"}})
+		case r.URL.Path == "/v2/_catalog":
+			json.NewEncoder(w).Encode(map[string]any{"repositories": []string{"c"}})
+		default:
+			json.NewEncoder(w).Encode(map[string]any{"tags": []string{}})
+		}
+	}))
+	defer srv.Close()
+	c, _ := New(Config{URL: srv.URL, MaxRepos: 3})
+	if repos, more, err := c.repositories(t.Context()); err != nil || more || len(repos) != 3 {
+		t.Fatalf("want all 3 repositories across pages, got %v more=%v err=%v", repos, more, err)
+	}
+	c, _ = New(Config{URL: srv.URL, MaxRepos: 2})
+	l, err := c.List(t.Context(), time.Minute, false)
+	if err != nil || len(l.Problems) != 1 || !strings.Contains(l.Problems[0], "more than 2 repositories") {
+		t.Fatalf("want a truncation problem, got %+v err=%v", l, err)
+	}
+}
+
+func TestTokenRealmWithQuery(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			q := r.URL.Query()
+			if q.Get("account") != "x" || q.Get("service") != "svc" || q.Get("scope") == "" {
+				w.WriteHeader(400)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]string{"token": "t"})
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer t" {
+			w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="%s/token?account=x",service="svc"`, srv.URL))
+			w.WriteHeader(401)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"repositories": []string{"a"}})
+	}))
+	defer srv.Close()
+	c, _ := New(Config{URL: srv.URL})
+	if repos, err := c.Repositories(t.Context()); err != nil || len(repos) != 1 {
+		t.Fatalf("got %v, %v", repos, err)
+	}
+}
+
+func TestDeleteTagRejectsInvalidNames(t *testing.T) {
+	c, _ := New(Config{URL: "http://127.0.0.1:1"})
+	for _, tc := range [][2]string{{"foo?x=1", "v1"}, {"team/app", "../../other/manifests/latest"}, {"Team/App", "v1"}, {"app", ""}} {
+		if err := c.DeleteTag(t.Context(), tc[0], tc[1]); !errors.Is(err, ErrInvalidName) {
+			t.Errorf("%q:%q: want ErrInvalidName, got %v", tc[0], tc[1], err)
+		}
+	}
+}
+
+func TestConcurrentListsShareOneScan(t *testing.T) {
+	var catalogs atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/_catalog" {
+			catalogs.Add(1)
+			time.Sleep(50 * time.Millisecond)
+			json.NewEncoder(w).Encode(map[string]any{"repositories": []string{}})
+		}
+	}))
+	defer srv.Close()
+	c, _ := New(Config{URL: srv.URL})
+	var wg sync.WaitGroup
+	for range 5 {
+		wg.Add(1)
+		go func() { defer wg.Done(); c.List(t.Context(), time.Minute, false) }()
+	}
+	wg.Wait()
+	if n := catalogs.Load(); n != 1 {
+		t.Fatalf("want one scan for concurrent requests, got %d", n)
 	}
 }

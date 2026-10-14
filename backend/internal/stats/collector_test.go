@@ -69,3 +69,30 @@ func TestCollectorHistory(t *testing.T) {
 		t.Fatal("latest should have both running containers")
 	}
 }
+
+type stoppingSource struct {
+	fakeSource
+	stopped bool
+}
+
+func (f *stoppingSource) ListContainers(ctx context.Context, all bool) ([]docker.Container, error) {
+	list, err := f.fakeSource.ListContainers(ctx, all)
+	if f.stopped {
+		list = list[1:] // "busy" stopped
+	}
+	return list, err
+}
+
+func TestHistoryLeavesOutStoppedContainers(t *testing.T) {
+	src := &stoppingSource{}
+	c := New(src, time.Second, time.Minute)
+	for range 3 {
+		c.tick(context.Background())
+	}
+	src.stopped = true
+	c.tick(context.Background())
+	h := c.History(time.Time{})
+	if len(h) != 1 || h[0].Name != "idle" {
+		t.Fatalf("want only the still-running container, got %+v", h)
+	}
+}

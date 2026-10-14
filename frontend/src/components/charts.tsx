@@ -26,6 +26,7 @@ export function CpuChart({ series, top = 5, height = 240 }: { series: StatsSerie
   const data = useMemo(
     () =>
       series.slice(0, top).map((s, i) => ({
+        id: s.id,
         name: s.name,
         color: SERIES_COLORS[i % SERIES_COLORS.length]!,
         pts: s.samples.map((p) => ({ t: new Date(p.ts), v: p.cpu_pct })),
@@ -90,7 +91,7 @@ export function CpuChart({ series, top = 5, height = 240 }: { series: StatsSerie
           <line x1={m.l} x2={W - m.r} y1={y(0)} y2={y(0)} className="axis" />
           {data.map((d) => (
             <path
-              key={d.name}
+              key={d.id}
               d={path(d.pts) ?? ''}
               fill="none"
               stroke={d.color}
@@ -101,7 +102,7 @@ export function CpuChart({ series, top = 5, height = 240 }: { series: StatsSerie
             />
           ))}
           {labels.map(({ d, y: ly }) => (
-            <text key={d.name} x={W - m.r + 6} y={ly} dy="0.32em">
+            <text key={d.id} x={W - m.r + 6} y={ly} dy="0.32em">
               <tspan className="strong">{d.name}</tspan> {fmtPct(d.pts.at(-1)?.v)}
             </text>
           ))}
@@ -110,7 +111,7 @@ export function CpuChart({ series, top = 5, height = 240 }: { series: StatsSerie
               <line x1={x(hoverT)} x2={x(hoverT)} y1={m.t} y2={H - m.b} className="reference" />
               {data.map((d) => {
                 const p = d.pts.find((q) => +q.t === +hoverT);
-                return p ? <circle key={d.name} cx={x(p.t)} cy={y(p.v)} r={3.5} fill={d.color} /> : null;
+                return p ? <circle key={d.id} cx={x(p.t)} cy={y(p.v)} r={3.5} fill={d.color} /> : null;
               })}
             </g>
           )}
@@ -139,7 +140,7 @@ export function CpuChart({ series, top = 5, height = 240 }: { series: StatsSerie
             .filter((o) => o.p)
             .sort((a, b) => b.p!.v - a.p!.v)
             .map(({ d, p }) => (
-              <div key={d.name}>
+              <div key={d.id}>
                 <span className="sw" style={{ background: d.color }} />
                 {d.name} <b>{fmtPct(p!.v)}</b>
               </div>

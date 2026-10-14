@@ -98,3 +98,34 @@ func TestErrorsAndPullStreamError(t *testing.T) {
 		t.Fatalf("want mid-stream pull error, got %v", err)
 	}
 }
+
+func TestPruneVolumesByAPIVersion(t *testing.T) {
+	for _, tc := range []struct {
+		api        string
+		all        bool
+		wantFilter string
+		wantErr    bool
+	}{
+		{"1.45", true, `{"all":["true"]}`, false},
+		{"1.45", false, "", false},
+		{"1.41", true, "", false},
+		{"1.41", false, "", true},
+	} {
+		var gotFilter string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/version":
+				json.NewEncoder(w).Encode(map[string]string{"ApiVersion": tc.api})
+			case "/volumes/prune":
+				gotFilter = r.URL.Query().Get("filters")
+				json.NewEncoder(w).Encode(map[string]any{})
+			}
+		}))
+		c, _ := New("tcp://" + strings.TrimPrefix(srv.URL, "http://"))
+		_, err := c.PruneVolumes(t.Context(), tc.all)
+		srv.Close()
+		if (err != nil) != tc.wantErr || gotFilter != tc.wantFilter {
+			t.Errorf("api %s all=%v: filter %q err %v", tc.api, tc.all, gotFilter, err)
+		}
+	}
+}
