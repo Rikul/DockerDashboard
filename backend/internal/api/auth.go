@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,12 +24,84 @@ const (
 	sessionTTL    = 7 * 24 * time.Hour
 )
 
-// sessionValue derives the cookie value from the token, so changing the
-// token signs everyone out and the token itself never sits in a cookie.
-func (s *Server) sessionValue() string {
+// A session cookie is "v2.<expiry unix>.<random id>.<hmac>", signed with
+// a key derived from the token. The server checks the signature and the
+// expiry, so a copied cookie stops working after sessionTTL and changing the
+// token signs everyone out; the token itself never sits in a cookie. Logout
+// revokes the session's id, which is remembered until the cookie would have
+// expired anyway (in memory: a restart forgets revocations, not sessions).
+const sessionPrefix = "v2"
+
+func (s *Server) sessionMAC(payload string) string {
 	m := hmac.New(sha256.New, []byte(s.cfg.Token))
-	m.Write([]byte("dockerdashboard-session-v1"))
+	m.Write([]byte("dockerdashboard-session-v2\x00" + payload))
 	return hex.EncodeToString(m.Sum(nil))
+}
+
+func (s *Server) newSession(now time.Time) string {
+	id := make([]byte, 16)
+	if _, err := rand.Read(id); err != nil {
+		panic(err) // crypto/rand doesn't fail on supported platforms
+	}
+	payload := fmt.Sprintf("%s.%d.%s", sessionPrefix, now.Add(sessionTTL).Unix(), hex.EncodeToString(id))
+	return payload + "." + s.sessionMAC(payload)
+}
+
+// parseSession returns the session's id and expiry if v is a validly
+// signed, unexpired session.
+func (s *Server) parseSession(v string, now time.Time) (id string, exp time.Time, ok bool) {
+	i := strings.LastIndexByte(v, '.')
+	if i < 0 {
+		return "", time.Time{}, false
+	}
+	payload, mac := v[:i], v[i+1:]
+	if !equal(mac, s.sessionMAC(payload)) {
+		return "", time.Time{}, false
+	}
+	parts := strings.Split(payload, ".")
+	if len(parts) != 3 || parts[0] != sessionPrefix {
+		return "", time.Time{}, false
+	}
+	sec, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	exp = time.Unix(sec, 0)
+	if !now.Before(exp) {
+		return "", time.Time{}, false
+	}
+	return parts[2], exp, true
+}
+
+func (s *Server) sessionValid(v string) bool {
+	id, _, ok := s.parseSession(v, time.Now())
+	if !ok {
+		return false
+	}
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	_, revoked := s.revoked[id]
+	return !revoked
+}
+
+// revokeSession remembers a signed-out session until it would expire.
+func (s *Server) revokeSession(v string) {
+	now := time.Now()
+	id, exp, ok := s.parseSession(v, now)
+	if !ok {
+		return
+	}
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	if s.revoked == nil {
+		s.revoked = map[string]time.Time{}
+	}
+	for k, e := range s.revoked {
+		if !now.Before(e) {
+			delete(s.revoked, k)
+		}
+	}
+	s.revoked[id] = exp
 }
 
 // Guessing the token is slowed down per client address: after repeated
@@ -152,7 +226,7 @@ func (s *Server) authState(r *http.Request) (ok, bearer bool) {
 		return s.checkToken(r, strings.TrimPrefix(h, "Bearer ")), true
 	}
 	if c, err := r.Cookie(sessionCookie); err == nil {
-		return equal(c.Value, s.sessionValue()), false
+		return s.sessionValid(c.Value), false
 	}
 	return false, false
 }
@@ -222,7 +296,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
-		Value:    s.sessionValue(),
+		Value:    s.newSession(time.Now()),
 		Path:     "/",
 		MaxAge:   int(sessionTTL.Seconds()),
 		HttpOnly: true,
@@ -233,6 +307,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		s.revokeSession(c.Value)
+	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 }

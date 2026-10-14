@@ -47,6 +47,9 @@ type Server struct {
 	loginPruned   time.Time
 	failStep      time.Duration // wait per recent failure; 0 means the default
 
+	sessionMu sync.Mutex
+	revoked   map[string]time.Time // signed-out session id -> its expiry
+
 	// streams is cancelled when shutdown begins, ending long-lived log
 	// streams while ordinary requests are left to finish.
 	streams     context.Context
@@ -159,8 +162,6 @@ func dockerError(w http.ResponseWriter, err error) {
 	code := docker.StatusCode(err)
 	var de *docker.Error
 	switch {
-	case code == http.StatusNotModified:
-		writeJSON(w, http.StatusOK, map[string]string{"status": "unchanged"})
 	case code >= 400 && code < 500 && errors.As(err, &de):
 		writeError(w, code, de.Message)
 	default:

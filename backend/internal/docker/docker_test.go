@@ -136,3 +136,23 @@ func TestPruneVolumesByAPIVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestLogReaderCutsOverlongLineOnce(t *testing.T) {
+	long := strings.Repeat("x", 100<<10)
+	for _, tty := range []bool{true, false} {
+		var src io.Reader = strings.NewReader(long + "\nnext\n")
+		if !tty {
+			// Split across frames, as the daemon does.
+			var b bytes.Buffer
+			for i := 0; i < len(long); i += 30 << 10 {
+				b.Write(frame(1, long[i:min(i+30<<10, len(long))]))
+			}
+			b.Write(frame(1, "\nnext\n"))
+			src = &b
+		}
+		got := readAll(t, NewLogReader(src, tty))
+		if len(got) != 2 || got[1].Text != "next" || !strings.HasSuffix(got[0].Text, truncatedMark) || len(got[0].Text) != maxLine+len(truncatedMark) {
+			t.Fatalf("tty=%v: want one cut line then next, got %d lines (first %d bytes)", tty, len(got), len(got[0].Text))
+		}
+	}
+}

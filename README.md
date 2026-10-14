@@ -51,7 +51,7 @@ Running the backend on its own without building the frontend first serves the AP
 **Access to the Docker socket is root on the host.** Anyone who can sign in to this dashboard can, in effect, control the machine. Defaults are set with that in mind:
 
 - Sign-in is required unless you explicitly set `DASHBOARD_AUTH=none`.
-- The session is an `HttpOnly`, `SameSite=Strict` cookie derived from the token, so the token itself is never stored in the browser. Changing the token signs everyone out.
+- The session is an `HttpOnly`, `SameSite=Strict` cookie signed with a key derived from the token, so the token itself is never stored in the browser. The server enforces its 7-day lifetime, signing out revokes that session, and changing the token signs everyone out. Revocations are kept in memory, so a restart forgets them (the sessions still expire).
 - Every write must carry an `X-Requested-With` header, which protects against cross-site requests. Repeated wrong tokens (at login or as a bearer token) are answered more and more slowly, counted per client address (per /64 for IPv6), and one address's attempts are checked one at a time. If an attacker fills the 4096 tracked addresses with recent failures, new addresses are spread over 64 shared buckets, so a new client may then share a wait with an attacker. Behind a reverse proxy every client shares the proxy's address, so they share that slowdown.
 - Responses carry a strict Content-Security-Policy, `X-Frame-Options: DENY` and `nosniff`.
 - Container environment variables are never sent to the browser.

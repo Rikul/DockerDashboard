@@ -190,3 +190,36 @@ func TestClientAddrGroupsIPv6By64(t *testing.T) {
 		t.Fatalf("ipv4: %q", c)
 	}
 }
+
+func TestSessionsExpireAndLogoutRevokes(t *testing.T) {
+	s := &Server{cfg: Config{Token: tok}}
+	now := time.Now()
+	a, b := s.newSession(now), s.newSession(now)
+	if a == b || !s.sessionValid(a) || !s.sessionValid(b) {
+		t.Fatal("fresh sessions should be distinct and valid")
+	}
+	if strings.Contains(a, tok) {
+		t.Fatal("the token must not appear in the cookie")
+	}
+	// Tampering with the expiry breaks the signature.
+	parts := strings.Split(a, ".")
+	parts[1] = "99999999999"
+	if s.sessionValid(strings.Join(parts, ".")) {
+		t.Fatal("a tampered session was accepted")
+	}
+	// The server, not just the browser, enforces the TTL.
+	if s.sessionValid(s.newSession(now.Add(-sessionTTL - time.Minute))) {
+		t.Fatal("an expired session was accepted")
+	}
+	// Logging out revokes that session only.
+	r := httptest.NewRequest("POST", "/api/logout", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: a})
+	s.handleLogout(httptest.NewRecorder(), r)
+	if s.sessionValid(a) || !s.sessionValid(b) {
+		t.Fatal("logout should revoke its own session and no other")
+	}
+	// A different token invalidates every session.
+	if (&Server{cfg: Config{Token: tok + "x"}}).sessionValid(b) {
+		t.Fatal("a session survived a token change")
+	}
+}

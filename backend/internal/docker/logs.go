@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"strings"
 )
 
 // LogLine is one line of container output.
@@ -21,15 +22,19 @@ type LogReader struct {
 	tty     bool
 	pending []LogLine
 	partial map[string]string
+	skip    map[string]bool // dropping the rest of an over-long line
 }
 
 // NewLogReader wraps a stream from ContainerLogs; tty is the container's
 // Config.Tty.
 func NewLogReader(r io.Reader, tty bool) *LogReader {
-	return &LogReader{r: bufio.NewReaderSize(r, 64<<10), tty: tty, partial: map[string]string{}}
+	return &LogReader{r: bufio.NewReaderSize(r, 64<<10), tty: tty, partial: map[string]string{}, skip: map[string]bool{}}
 }
 
 const maxLine = 16 << 10 // longer lines are cut, to bound memory
+
+// truncatedMark ends a line that was cut at maxLine.
+const truncatedMark = " …[line truncated]"
 
 // Next returns the next line, or io.EOF at the end of the stream.
 func (l *LogReader) Next() (LogLine, error) {
@@ -87,20 +92,37 @@ func (l *LogReader) fill() error {
 }
 
 func (l *LogReader) add(stream, chunk string) {
-	text := l.partial[stream] + chunk
-	start := 0
-	for i := 0; i < len(text); i++ {
-		if text[i] == '\n' {
-			l.pending = append(l.pending, LogLine{Stream: stream, Text: trimCR(text[start:i])})
-			start = i + 1
+	for chunk != "" {
+		i := strings.IndexByte(chunk, '\n')
+		if l.skip[stream] {
+			// Inside a line already cut at maxLine: drop up to its end.
+			if i < 0 {
+				return
+			}
+			l.skip[stream] = false
+			chunk = chunk[i+1:]
+			continue
 		}
+		if i < 0 {
+			rest := l.partial[stream] + chunk
+			if len(rest) > maxLine {
+				// Emit the head once and skip the rest of the line, rather
+				// than emitting its later chunks as separate lines.
+				l.pending = append(l.pending, LogLine{Stream: stream, Text: rest[:maxLine] + truncatedMark})
+				rest = ""
+				l.skip[stream] = true
+			}
+			l.partial[stream] = rest
+			return
+		}
+		line := trimCR(l.partial[stream] + chunk[:i])
+		delete(l.partial, stream)
+		if len(line) > maxLine {
+			line = line[:maxLine] + truncatedMark
+		}
+		l.pending = append(l.pending, LogLine{Stream: stream, Text: line})
+		chunk = chunk[i+1:]
 	}
-	rest := text[start:]
-	if len(rest) > maxLine {
-		l.pending = append(l.pending, LogLine{Stream: stream, Text: rest[:maxLine]})
-		rest = ""
-	}
-	l.partial[stream] = rest
 }
 
 func trimCR(s string) string {

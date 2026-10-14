@@ -106,7 +106,8 @@ export function LogViewer({ id, name, onClose }: { id: string; name: string; onC
     a.href = URL.createObjectURL(blob);
     a.download = `${name}.log`;
     a.click();
-    URL.revokeObjectURL(a.href);
+    // Revoking right away can cancel the download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
   };
 
   return (
