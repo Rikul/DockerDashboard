@@ -47,7 +47,7 @@ export interface Container {
   created: string;
   state: ContainerState;
   status: string;
-  health?: 'healthy' | 'unhealthy' | 'starting' | 'none';
+  health?: 'healthy' | 'unhealthy' | 'starting';
   exit_code?: number;
   oom_killed?: boolean;
   restart_count: number;

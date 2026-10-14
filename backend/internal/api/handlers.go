@@ -223,8 +223,9 @@ func (s *Server) containerViews(ctx context.Context) ([]ContainerView, error) {
 			v.OOMKilled = in.State.OOMKilled
 			v.MemLimitSet = in.HostConfig.Memory > 0
 			// The list's Status carries the current health; the inspect may
-			// be cached, so it only fills in when Status says nothing.
-			if v.Health == "" && in.State.Health != nil && in.State.Health.Status != "none" {
+			// be cached, so it only fills in when Status says nothing, and
+			// only while running (health isn't checked otherwise).
+			if v.Health == "" && c.State == "running" && in.State.Health != nil && in.State.Health.Status != "none" {
 				v.Health = in.State.Health.Status
 			}
 			if c.State == "exited" || c.State == "dead" {
@@ -320,7 +321,7 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	// End the stream when the client goes away or the server shuts down.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	defer context.AfterFunc(s.streams, cancel)()
+	defer context.AfterFunc(s.streamCtx(), cancel)()
 	id := r.PathValue("id")
 	in, err := s.docker.InspectContainer(ctx, id)
 	if err != nil {
@@ -373,7 +374,7 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
-			if s.streams.Err() != nil {
+			if s.streamCtx().Err() != nil {
 				fmt.Fprint(w, "event: end\ndata: {\"reason\":\"the dashboard server is shutting down\"}\n\n")
 				flusher.Flush()
 			}
@@ -406,7 +407,7 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			reason := "end"
-			if s.streams.Err() != nil {
+			if s.streamCtx().Err() != nil {
 				reason = "the dashboard server is shutting down"
 			} else if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
 				reason = err.Error()

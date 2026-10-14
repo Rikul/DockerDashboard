@@ -96,9 +96,8 @@ func TestHealthFromStatus(t *testing.T) {
 }
 
 func TestThrottlingIsPerClientAndSerialized(t *testing.T) {
-	defer func(d time.Duration) { failStep = d }(failStep)
-	failStep = 40 * time.Millisecond
-	s := &Server{cfg: Config{Token: tok}}
+	const step = 100 * time.Millisecond
+	s := &Server{cfg: Config{Token: tok}, failStep: step}
 	h := s.authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	from := func(addr, token string) int {
 		r := httptest.NewRequest("GET", "/api/containers", nil)
@@ -122,7 +121,7 @@ func TestThrottlingIsPerClientAndSerialized(t *testing.T) {
 	if c := from("203.0.113.9", tok); c != 200 {
 		t.Fatalf("good bearer: %d", c)
 	}
-	if time.Since(start) > 20*time.Millisecond {
+	if time.Since(start) > step/2 {
 		t.Fatal("a clean client should not be delayed by another client's failures")
 	}
 	if n := s.attemptsFor("198.51.100.7").failures; n != 2 {
@@ -137,7 +136,7 @@ func TestThrottlingIsPerClientAndSerialized(t *testing.T) {
 		go func() { defer wg.Done(); from("198.51.100.7", "wrong") }()
 	}
 	wg.Wait()
-	if el := time.Since(start); el < 9*failStep {
+	if el := time.Since(start); el < 9*step {
 		t.Fatalf("parallel guesses were not serialized: took %v", el)
 	}
 }
@@ -164,11 +163,17 @@ func TestTrackedAddressesAreBounded(t *testing.T) {
 		a := s.attemptsFor(fmt.Sprintf("10.0.%d.%d", i/256, i%256))
 		a.failures, a.lastFail = 1, time.Now()
 	}
-	if n := len(s.loginAttempts); n > maxTracked+1 { // +1: the overflow bucket
-		t.Fatalf("tracked %d addresses, want at most %d", n, maxTracked+1)
+	// New addresses are spread over the overflow buckets, so the map
+	// stays bounded and one bucket holds only part of them.
+	buckets := map[*attempts]bool{}
+	for i := range 1000 {
+		buckets[s.attemptsFor(fmt.Sprintf("192.0.%d.%d", i/256, i%256))] = true
 	}
-	if s.attemptsFor("192.0.2.1") != s.attemptsFor("192.0.2.2") {
-		t.Fatal("new addresses should share the overflow bucket when full")
+	if len(buckets) < overflowBuckets/2 || len(buckets) > overflowBuckets {
+		t.Fatalf("new addresses landed in %d buckets, want about %d", len(buckets), overflowBuckets)
+	}
+	if n := len(s.loginAttempts); n > maxTracked+overflowBuckets {
+		t.Fatalf("tracked %d entries, want at most %d", n, maxTracked+overflowBuckets)
 	}
 }
 

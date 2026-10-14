@@ -159,8 +159,8 @@ func TestTagsFollowsPaginationAndRanksByCreation(t *testing.T) {
 	if len(l.Problems) != 1 || !strings.HasPrefix(l.Problems[0], "broken:") {
 		t.Fatalf("want a problem for the broken repo, got %v", l.Problems)
 	}
-	if c.cache.Tags != nil {
-		t.Fatal("an incomplete listing must not be cached")
+	if c.cacheComplete {
+		t.Fatal("an incomplete listing must not be cached as complete")
 	}
 }
 
@@ -173,7 +173,7 @@ func TestVersionLess(t *testing.T) {
 }
 
 func TestTransientDescribeFailureIsNotCached(t *testing.T) {
-	fail := true
+	var fail, blobFail bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v2/_catalog":
@@ -183,31 +183,54 @@ func TestTransientDescribeFailureIsNotCached(t *testing.T) {
 		case r.URL.Path == "/v2/app/manifests/v1" && fail:
 			w.WriteHeader(503)
 		case r.URL.Path == "/v2/app/manifests/v1":
-			json.NewEncoder(w).Encode(map[string]any{"mediaType": "application/vnd.oci.image.manifest.v1+json"})
+			json.NewEncoder(w).Encode(map[string]any{
+				"mediaType": "application/vnd.oci.image.manifest.v1+json",
+				"config":    map[string]any{"digest": "sha256:cfg", "size": 1},
+			})
+		case r.URL.Path == "/v2/app/blobs/sha256:cfg" && blobFail:
+			w.WriteHeader(503)
+		case r.URL.Path == "/v2/app/blobs/sha256:cfg":
+			json.NewEncoder(w).Encode(map[string]any{"created": "2026-10-01T12:00:00Z"})
 		default:
 			w.WriteHeader(404)
 		}
 	}))
 	defer srv.Close()
 	c, _ := New(Config{URL: srv.URL})
+	expire := func() { c.cachedAt = c.cachedAt.Add(-failedListingTTL - time.Second) }
+
+	fail = true
 	l, err := c.List(t.Context(), time.Minute, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(l.Tags) != 1 || l.Tags[0].Error == "" || len(l.Problems) == 0 {
-		t.Fatalf("want an unreadable tag and a problem, got %+v", l)
+	if len(l.Tags) != 1 || l.Tags[0].Error == "" || len(l.Problems) == 0 || c.cacheComplete {
+		t.Fatalf("want an unreadable tag, a problem and an incomplete cache, got %+v", l)
 	}
-	// A forced refresh that fails must not leave an older good listing to
-	// be served by the next ordinary request.
+	// Within failedListingTTL the failed listing (with its problem) is
+	// served without rescanning; after it, the registry is tried again.
 	fail = false
-	c.List(t.Context(), time.Minute, true)
+	if l, _ = c.List(t.Context(), time.Minute, false); len(l.Problems) == 0 {
+		t.Fatal("want the recent failed listing served from cache")
+	}
+	expire()
+	if l, _ = c.List(t.Context(), time.Minute, false); l.Tags[0].Error != "" || !c.cacheComplete {
+		t.Fatalf("the failed listing was not retried: %+v", l.Tags[0])
+	}
+
+	// A forced refresh that fails replaces the older good listing.
 	fail = true
 	c.List(t.Context(), time.Minute, true)
-	if c.cache.Tags != nil {
-		t.Fatal("a failed refresh left the previous listing cached")
+	if l, _ = c.List(t.Context(), time.Minute, false); l.Tags[0].Error == "" {
+		t.Fatal("a failed refresh left the previous listing in place")
 	}
-	fail = false
-	if l, _ = c.List(t.Context(), time.Minute, false); l.Tags[0].Error != "" {
-		t.Fatalf("the failed listing was cached: %+v", l.Tags[0])
+
+	// A failed config-blob read keeps the tag readable but the listing
+	// incomplete.
+	fail, blobFail = false, true
+	expire()
+	l, _ = c.List(t.Context(), time.Minute, false)
+	if l.Tags[0].Error != "" || l.Tags[0].Digest == "" && l.Tags[0].Size == 0 || c.cacheComplete {
+		t.Fatalf("want a readable tag in an incomplete listing, got %+v complete=%v", l.Tags[0], c.cacheComplete)
 	}
 }

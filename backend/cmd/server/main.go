@@ -133,8 +133,10 @@ func run() error {
 	shutCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
-		slog.Warn("requests still running at shutdown were cut off", "err", err)
-		return httpSrv.Close()
+		// Cut off what is left, but still exit non-zero so the dirty
+		// shutdown is visible to whatever supervises the process.
+		_ = httpSrv.Close()
+		return fmt.Errorf("requests still running at shutdown were cut off: %w", err)
 	}
 	return nil
 }

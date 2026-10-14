@@ -42,10 +42,15 @@ type Client struct {
 	mu     sync.Mutex
 	tokens map[string]string // scope -> bearer token
 
-	cacheMu  sync.Mutex
-	cache    Listing
-	cachedAt time.Time
+	cacheMu       sync.Mutex
+	cache         Listing
+	cachedAt      time.Time
+	cacheComplete bool
 }
+
+// failedListingTTL is how long an incomplete listing is served from cache
+// before the registry is tried again.
+const failedListingTTL = 10 * time.Second
 
 // Listing is what List returns: the tags, plus any repository that could not
 // be read completely, so a partial listing is never mistaken for a full one.
@@ -415,9 +420,14 @@ func (c *Client) describe(ctx context.Context, repo, tag string) (Tag, error) {
 		var cfg struct {
 			Created time.Time `json:"created"`
 		}
-		if err := c.getJSON(ctx, "/v2/"+repo+"/blobs/"+m.Config.Digest, "repository:"+repo+":pull", &cfg); err == nil {
-			t.Created = cfg.Created
+		err := c.getJSON(ctx, "/v2/"+repo+"/blobs/"+m.Config.Digest, "repository:"+repo+":pull", &cfg)
+		if err != nil {
+			// Created is only used for display and ranking, so the tag
+			// isn't marked unreadable, but the error is returned so a
+			// transient failure keeps the listing from being cached.
+			return t, err
 		}
+		t.Created = cfg.Created
 	}
 	return t, nil
 }
@@ -428,8 +438,16 @@ func (c *Client) describe(ctx context.Context, repo, tag string) (Tag, error) {
 func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Listing, error) {
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
-	if !refresh && c.cache.Tags != nil && time.Since(c.cachedAt) < ttl {
-		return c.cache, nil
+	if !refresh && c.cache.Tags != nil {
+		// An incomplete listing is kept briefly, so a struggling registry
+		// isn't rescanned on every request, but retried well before ttl.
+		keep := ttl
+		if !c.cacheComplete {
+			keep = min(ttl, failedListingTTL)
+		}
+		if time.Since(c.cachedAt) < keep {
+			return c.cache, nil
+		}
 	}
 	repos, err := c.Repositories(ctx)
 	if err != nil {
@@ -508,11 +526,9 @@ func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Lis
 	l := Listing{Tags: out, Problems: problems}
 	// A listing hit by a failed request is returned (with its problems) but
 	// not cached, so the next poll retries instead of serving it for the ttl.
-	if complete {
-		c.cache, c.cachedAt = l, time.Now()
-	} else {
-		c.cache = Listing{} // an older listing must not stand in for this failed one
-	}
+	// An incomplete listing replaces any older one (which must not stand in
+	// for it) and is only kept for failedListingTTL.
+	c.cache, c.cachedAt, c.cacheComplete = l, time.Now(), complete
 	return l, nil
 }
 

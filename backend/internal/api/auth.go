@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
+	"hash/fnv"
 	"net"
 	"net/http"
 	"net/netip"
@@ -33,12 +35,11 @@ func (s *Server) sessionValue() string {
 // answered, and attempts from one address are checked one at a time so
 // sending many in parallel does not get around the wait. Other clients, and
 // successful requests elsewhere, neither reset nor inherit that wait.
-var failStep = 500 * time.Millisecond // a var so tests can shorten it
-
 const (
-	failWindow   = 15 * time.Minute
-	maxFailSteps = 10
-	maxTracked   = 4096 // addresses remembered before old entries are pruned
+	defaultFailStep = 500 * time.Millisecond
+	failWindow      = 15 * time.Minute
+	maxFailSteps    = 10
+	maxTracked      = 4096 // addresses remembered before old entries are pruned
 )
 
 type attempts struct {
@@ -69,9 +70,13 @@ func (s *Server) attemptsFor(addr string) *attempts {
 		}
 	}
 	if len(s.loginAttempts) >= maxTracked {
-		// Still full of recent failures: new addresses share one bucket
-		// rather than growing the map, so they are throttled together.
-		addr = overflowAddr
+		// Still full of recent failures: rather than growing the map, new
+		// addresses go to one of a few shared buckets chosen by hash. A
+		// new client may then share a bucket (and its wait) with an
+		// attacker, but only one in overflowBuckets of them does.
+		h := fnv.New32a()
+		h.Write([]byte(addr))
+		addr = fmt.Sprintf("overflow-%d", h.Sum32()%overflowBuckets)
 		if a := s.loginAttempts[addr]; a != nil {
 			return a
 		}
@@ -81,9 +86,10 @@ func (s *Server) attemptsFor(addr string) *attempts {
 	return a
 }
 
-// overflowAddr is the shared bucket used once maxTracked addresses are
-// tracked. It is not a valid address, so no real client maps to it.
-const overflowAddr = "overflow"
+// overflowBuckets is how many shared buckets new addresses are spread over
+// once maxTracked addresses are tracked. Their keys are not valid
+// addresses, so no client maps to one directly.
+const overflowBuckets = 64
 
 // clientAddr is the address failures are counted against. It is the TCP
 // peer: X-Forwarded-For is not trusted, since any client can set it. IPv6
@@ -101,6 +107,13 @@ func clientAddr(r *http.Request) string {
 	return host
 }
 
+func (s *Server) failDelayStep() time.Duration {
+	if s.failStep > 0 {
+		return s.failStep
+	}
+	return defaultFailStep
+}
+
 // checkToken compares a candidate token against the configured one. Every
 // path that accepts the raw token (login and bearer auth) goes through here.
 func (s *Server) checkToken(r *http.Request, candidate string) bool {
@@ -111,7 +124,7 @@ func (s *Server) checkToken(r *http.Request, candidate string) bool {
 		a.failures = 0
 	}
 	if a.failures > 0 {
-		t := time.NewTimer(time.Duration(min(a.failures, maxFailSteps)) * failStep)
+		t := time.NewTimer(time.Duration(min(a.failures, maxFailSteps)) * s.failDelayStep())
 		select {
 		case <-t.C:
 		case <-r.Context().Done():

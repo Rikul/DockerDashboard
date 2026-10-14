@@ -45,6 +45,7 @@ type Server struct {
 	loginMu       sync.Mutex
 	loginAttempts map[string]*attempts // by client address
 	loginPruned   time.Time
+	failStep      time.Duration // wait per recent failure; 0 means the default
 
 	// streams is cancelled when shutdown begins, ending long-lived log
 	// streams while ordinary requests are left to finish.
@@ -66,7 +67,20 @@ func New(cfg Config, dc *docker.Client, sc *stats.Collector, reg *registry.Clien
 
 // StopStreams ends open log streams. Call it when shutdown begins, so
 // http.Server.Shutdown is not held open by them.
-func (s *Server) StopStreams() { s.stopStreams() }
+func (s *Server) StopStreams() {
+	if s.stopStreams != nil {
+		s.stopStreams()
+	}
+}
+
+// streamCtx is cancelled when shutdown begins. It is never cancelled for a
+// Server not built by New.
+func (s *Server) streamCtx() context.Context {
+	if s.streams == nil {
+		return context.Background()
+	}
+	return s.streams
+}
 
 // Handler returns the root HTTP handler.
 func (s *Server) Handler() http.Handler {
