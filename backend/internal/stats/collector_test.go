@@ -96,3 +96,28 @@ func TestHistoryLeavesOutStoppedContainers(t *testing.T) {
 		t.Fatalf("want only the still-running container, got %+v", h)
 	}
 }
+
+type flakyStatsSource struct {
+	fakeSource
+	failBusy bool
+}
+
+func (f *flakyStatsSource) ContainerStats(ctx context.Context, id string) (docker.StatsJSON, error) {
+	if f.failBusy && id == "aaaaaaaaaaaaaaaa" {
+		return docker.StatsJSON{}, context.DeadlineExceeded
+	}
+	return f.fakeSource.ContainerStats(ctx, id)
+}
+
+func TestHistoryKeepsRunningContainerAfterFailedStatsRead(t *testing.T) {
+	src := &flakyStatsSource{}
+	c := New(src, time.Second, time.Minute)
+	for range 3 {
+		c.tick(context.Background())
+	}
+	src.failBusy = true
+	c.tick(context.Background())
+	if h := c.History(time.Time{}); len(h) != 2 {
+		t.Fatalf("a failed stats read hid a running container: %+v", h)
+	}
+}

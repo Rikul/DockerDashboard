@@ -117,6 +117,13 @@ func (c *Collector) tick(ctx context.Context) {
 
 	c.mu.Lock()
 	c.lastTick = now
+	// Running is decided by the list, not by which stats calls succeeded,
+	// so one failed stats read doesn't hide a running container's history.
+	for _, ct := range list {
+		if s := c.byID[ct.ID]; s != nil && ct.State == "running" {
+			s.seen = now
+		}
+	}
 	for _, r := range out {
 		s := c.byID[r.id]
 		if s == nil {

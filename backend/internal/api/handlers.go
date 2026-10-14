@@ -683,13 +683,16 @@ func (s *Server) handleNetworks(w http.ResponseWriter, r *http.Request) {
 	}
 	// Attached containers come from one container list, rather than an
 	// inspect per network on every poll.
+	cs, err := s.docker.ListContainers(ctx, true)
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
 	members := map[string][]string{} // network id -> container names
-	if cs, err := s.docker.ListContainers(ctx, true); err == nil {
-		for _, c := range cs {
-			for _, ep := range c.NetworkSettings.Networks {
-				if ep.NetworkID != "" {
-					members[ep.NetworkID] = append(members[ep.NetworkID], stats.Name(c.Names))
-				}
+	for _, c := range cs {
+		for _, ep := range c.NetworkSettings.Networks {
+			if ep.NetworkID != "" {
+				members[ep.NetworkID] = append(members[ep.NetworkID], stats.Name(c.Names))
 			}
 		}
 	}
