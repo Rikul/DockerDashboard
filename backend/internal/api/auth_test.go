@@ -1,10 +1,13 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func testServer(cfg Config) http.Handler {
@@ -92,19 +95,49 @@ func TestHealthFromStatus(t *testing.T) {
 	}
 }
 
-func TestBearerFailuresCountTowardThrottling(t *testing.T) {
-	s := &Server{cfg: Config{Token: tok}}
+func TestThrottlingIsPerClientAndSerialized(t *testing.T) {
+	const step = 100 * time.Millisecond
+	s := &Server{cfg: Config{Token: tok}, failStep: step}
 	h := s.authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	from := func(addr, token string) int {
+		r := httptest.NewRequest("GET", "/api/containers", nil)
+		r.RemoteAddr = addr + ":5555"
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
 	for range 2 {
-		if w := do(h, "GET", "/api/containers", "", map[string]string{"Authorization": "Bearer wrong"}); w.Code != 401 {
-			t.Fatalf("wrong bearer: %d", w.Code)
+		if c := from("198.51.100.7", "wrong"); c != 401 {
+			t.Fatalf("wrong bearer: %d", c)
 		}
 	}
-	if s.loginFailures != 2 {
-		t.Fatalf("bearer failures not counted: %d", s.loginFailures)
+	if n := s.attemptsFor("198.51.100.7").failures; n != 2 {
+		t.Fatalf("bearer failures not counted: %d", n)
 	}
-	if !s.checkToken(tok) || s.loginFailures != 0 {
-		t.Fatalf("a correct token should reset the failure count, got %d", s.loginFailures)
+	// Another client's success neither resets the attacker's count nor
+	// waits behind it.
+	start := time.Now()
+	if c := from("203.0.113.9", tok); c != 200 {
+		t.Fatalf("good bearer: %d", c)
+	}
+	if time.Since(start) > step/2 {
+		t.Fatal("a clean client should not be delayed by another client's failures")
+	}
+	if n := s.attemptsFor("198.51.100.7").failures; n != 2 {
+		t.Fatalf("another client's success reset the count: %d", n)
+	}
+	// Parallel guesses from one address are checked one at a time, so the
+	// waits add up instead of overlapping: 2+3+4 steps at least.
+	start = time.Now()
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Add(1)
+		go func() { defer wg.Done(); from("198.51.100.7", "wrong") }()
+	}
+	wg.Wait()
+	if el := time.Since(start); el < 9*step {
+		t.Fatalf("parallel guesses were not serialized: took %v", el)
 	}
 }
 
@@ -121,5 +154,39 @@ func TestRedactImageInspect(t *testing.T) {
 	}
 	if m["Config"].(map[string]any)["Cmd"] == nil {
 		t.Fatal("other fields should be kept")
+	}
+}
+
+func TestTrackedAddressesAreBounded(t *testing.T) {
+	s := &Server{}
+	for i := range maxTracked + 50 {
+		a := s.attemptsFor(fmt.Sprintf("10.0.%d.%d", i/256, i%256))
+		a.failures, a.lastFail = 1, time.Now()
+	}
+	// New addresses are spread over the overflow buckets, so the map
+	// stays bounded and one bucket holds only part of them.
+	buckets := map[*attempts]bool{}
+	for i := range 1000 {
+		buckets[s.attemptsFor(fmt.Sprintf("192.0.%d.%d", i/256, i%256))] = true
+	}
+	if len(buckets) < overflowBuckets/2 || len(buckets) > overflowBuckets {
+		t.Fatalf("new addresses landed in %d buckets, want about %d", len(buckets), overflowBuckets)
+	}
+	if n := len(s.loginAttempts); n > maxTracked+overflowBuckets {
+		t.Fatalf("tracked %d entries, want at most %d", n, maxTracked+overflowBuckets)
+	}
+}
+
+func TestClientAddrGroupsIPv6By64(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "[2001:db8:1:2:aaaa::1]:443"
+	a := clientAddr(r)
+	r.RemoteAddr = "[2001:db8:1:2:bbbb::9]:443"
+	if b := clientAddr(r); a != b || a != "2001:db8:1:2::/64" {
+		t.Fatalf("got %q and %q", a, b)
+	}
+	r.RemoteAddr = "192.0.2.4:80"
+	if c := clientAddr(r); c != "192.0.2.4" {
+		t.Fatalf("ipv4: %q", c)
 	}
 }

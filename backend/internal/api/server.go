@@ -43,8 +43,14 @@ type Server struct {
 	dfCached time.Time
 
 	loginMu       sync.Mutex
-	loginFailures int
-	loginLastFail time.Time
+	loginAttempts map[string]*attempts // by client address
+	loginPruned   time.Time
+	failStep      time.Duration // wait per recent failure; 0 means the default
+
+	// streams is cancelled when shutdown begins, ending long-lived log
+	// streams while ordinary requests are left to finish.
+	streams     context.Context
+	stopStreams context.CancelFunc
 }
 
 type inspectEntry struct {
@@ -55,7 +61,25 @@ type inspectEntry struct {
 
 // New wires a server. reg may be nil.
 func New(cfg Config, dc *docker.Client, sc *stats.Collector, reg *registry.Client) *Server {
-	return &Server{cfg: cfg, docker: dc, stats: sc, registry: reg, inspectCache: map[string]inspectEntry{}}
+	streams, stop := context.WithCancel(context.Background())
+	return &Server{cfg: cfg, docker: dc, stats: sc, registry: reg, inspectCache: map[string]inspectEntry{}, streams: streams, stopStreams: stop}
+}
+
+// StopStreams ends open log streams. Call it when shutdown begins, so
+// http.Server.Shutdown is not held open by them.
+func (s *Server) StopStreams() {
+	if s.stopStreams != nil {
+		s.stopStreams()
+	}
+}
+
+// streamCtx is cancelled when shutdown begins. It is never cancelled for a
+// Server not built by New.
+func (s *Server) streamCtx() context.Context {
+	if s.streams == nil {
+		return context.Background()
+	}
+	return s.streams
 }
 
 // Handler returns the root HTTP handler.

@@ -222,7 +222,10 @@ func (s *Server) containerViews(ctx context.Context) ([]ContainerView, error) {
 			v.RestartPolicy = in.HostConfig.RestartPolicy.Name
 			v.OOMKilled = in.State.OOMKilled
 			v.MemLimitSet = in.HostConfig.Memory > 0
-			if in.State.Health != nil {
+			// The list's Status carries the current health; the inspect may
+			// be cached, so it only fills in when Status says nothing, and
+			// only while running (health isn't checked otherwise).
+			if v.Health == "" && c.State == "running" && in.State.Health != nil && in.State.Health.Status != "none" {
 				v.Health = in.State.Health.Status
 			}
 			if c.State == "exited" || c.State == "dead" {
@@ -315,7 +318,10 @@ func (s *Server) handleContainersPrune(w http.ResponseWriter, r *http.Request) {
 // handleContainerLogs streams logs as Server-Sent Events: each event's data
 // is a JSON LogLine. With follow=0 the stream ends after the tail.
 func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	// End the stream when the client goes away or the server shuts down.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	defer context.AfterFunc(s.streamCtx(), cancel)()
 	id := r.PathValue("id")
 	in, err := s.docker.InspectContainer(ctx, id)
 	if err != nil {
@@ -368,6 +374,10 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			if s.streamCtx().Err() != nil {
+				fmt.Fprint(w, "event: end\ndata: {\"reason\":\"the dashboard server is shutting down\"}\n\n")
+				flusher.Flush()
+			}
 			return
 		case l := <-lines:
 			b, _ := json.Marshal(l)
@@ -397,7 +407,9 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			reason := "end"
-			if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+			if s.streamCtx().Err() != nil {
+				reason = "the dashboard server is shutting down"
+			} else if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
 				reason = err.Error()
 			}
 			b, _ := json.Marshal(map[string]string{"reason": reason})

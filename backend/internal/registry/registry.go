@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -41,10 +42,15 @@ type Client struct {
 	mu     sync.Mutex
 	tokens map[string]string // scope -> bearer token
 
-	cacheMu  sync.Mutex
-	cache    Listing
-	cachedAt time.Time
+	cacheMu       sync.Mutex
+	cache         Listing
+	cachedAt      time.Time
+	cacheComplete bool
 }
+
+// failedListingTTL is how long an incomplete listing is served from cache
+// before the registry is tried again.
+const failedListingTTL = 10 * time.Second
 
 // Listing is what List returns: the tags, plus any repository that could not
 // be read completely, so a partial listing is never mistaken for a full one.
@@ -370,13 +376,20 @@ func (c *Client) manifest(ctx context.Context, repo, ref string) (manifest, stri
 	return m, resp.Header.Get("Docker-Content-Digest"), nil
 }
 
-// Describe reads one tag's manifest, size and creation time.
+// Describe reads one tag's manifest, size and creation time. A failure is
+// recorded in the returned Tag's Error.
 func (c *Client) Describe(ctx context.Context, repo, tag string) Tag {
+	t, _ := c.describe(ctx, repo, tag)
+	return t
+}
+
+// describe is Describe that also returns the error it recorded, if any.
+func (c *Client) describe(ctx context.Context, repo, tag string) (Tag, error) {
 	t := Tag{Ref: c.base.Host + "/" + repo + ":" + tag, Repository: repo, Tag: tag}
 	m, digest, err := c.manifest(ctx, repo, tag)
 	if err != nil {
 		t.Error = err.Error()
-		return t
+		return t, err
 	}
 	t.Digest, t.MediaType = digest, m.MediaType
 	if len(m.Manifests) > 0 { // multi-platform: describe linux/amd64, else the first
@@ -396,7 +409,7 @@ func (c *Client) Describe(ctx context.Context, repo, tag string) Tag {
 		}
 		if m, _, err = c.manifest(ctx, repo, pick.Digest); err != nil {
 			t.Error = err.Error()
-			return t
+			return t, err
 		}
 	}
 	t.Size = m.Config.Size
@@ -407,11 +420,16 @@ func (c *Client) Describe(ctx context.Context, repo, tag string) Tag {
 		var cfg struct {
 			Created time.Time `json:"created"`
 		}
-		if err := c.getJSON(ctx, "/v2/"+repo+"/blobs/"+m.Config.Digest, "repository:"+repo+":pull", &cfg); err == nil {
-			t.Created = cfg.Created
+		err := c.getJSON(ctx, "/v2/"+repo+"/blobs/"+m.Config.Digest, "repository:"+repo+":pull", &cfg)
+		if err != nil {
+			// Created is only used for display and ranking, so the tag
+			// isn't marked unreadable, but the error is returned so a
+			// transient failure keeps the listing from being cached.
+			return t, err
 		}
+		t.Created = cfg.Created
 	}
-	return t
+	return t, nil
 }
 
 // List describes the newest MaxTags tags of each repository (bounded by
@@ -420,8 +438,16 @@ func (c *Client) Describe(ctx context.Context, repo, tag string) Tag {
 func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Listing, error) {
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
-	if !refresh && c.cache.Tags != nil && time.Since(c.cachedAt) < ttl {
-		return c.cache, nil
+	if !refresh && c.cache.Tags != nil {
+		// An incomplete listing is kept briefly, so a struggling registry
+		// isn't rescanned on every request, but retried well before ttl.
+		keep := ttl
+		if !c.cacheComplete {
+			keep = min(ttl, failedListingTTL)
+		}
+		if time.Since(c.cachedAt) < keep {
+			return c.cache, nil
+		}
 	}
 	repos, err := c.Repositories(ctx)
 	if err != nil {
@@ -450,6 +476,7 @@ func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Lis
 		}
 	}
 	described := make([]Tag, len(jobs))
+	var failed atomic.Bool
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
 	for i, j := range jobs {
@@ -458,10 +485,23 @@ func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Lis
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			described[i] = c.Describe(ctx, j.repo, j.tag)
+			var err error
+			described[i], err = c.describe(ctx, j.repo, j.tag)
+			// A tag deleted since it was listed is permanent; anything else
+			// (timeouts, 5xx, auth hiccups) may clear on the next try.
+			if err != nil && !errors.Is(err, ErrNotFound) {
+				failed.Store(true)
+			}
 		}()
 	}
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return Listing{}, err // the caller gave up; don't serve or cache a half-read listing
+	}
+	if failed.Load() {
+		complete = false
+		problems = append(problems, "some tags could not be read; they are marked unreadable and will be retried")
+	}
 
 	// Newest first within each repository (ties and unknown times fall back
 	// to version order), then keep MaxTags per repository.
@@ -486,9 +526,9 @@ func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Lis
 	l := Listing{Tags: out, Problems: problems}
 	// A listing hit by a failed request is returned (with its problems) but
 	// not cached, so the next poll retries instead of serving it for the ttl.
-	if complete {
-		c.cache, c.cachedAt = l, time.Now()
-	}
+	// An incomplete listing replaces any older one (which must not stand in
+	// for it) and is only kept for failedListingTTL.
+	c.cache, c.cachedAt, c.cacheComplete = l, time.Now(), complete
 	return l, nil
 }
 
