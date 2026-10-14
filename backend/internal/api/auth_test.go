@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -154,5 +155,33 @@ func TestRedactImageInspect(t *testing.T) {
 	}
 	if m["Config"].(map[string]any)["Cmd"] == nil {
 		t.Fatal("other fields should be kept")
+	}
+}
+
+func TestTrackedAddressesAreBounded(t *testing.T) {
+	s := &Server{}
+	for i := range maxTracked + 50 {
+		a := s.attemptsFor(fmt.Sprintf("10.0.%d.%d", i/256, i%256))
+		a.failures, a.lastFail = 1, time.Now()
+	}
+	if n := len(s.loginAttempts); n > maxTracked+1 { // +1: the overflow bucket
+		t.Fatalf("tracked %d addresses, want at most %d", n, maxTracked+1)
+	}
+	if s.attemptsFor("192.0.2.1") != s.attemptsFor("192.0.2.2") {
+		t.Fatal("new addresses should share the overflow bucket when full")
+	}
+}
+
+func TestClientAddrGroupsIPv6By64(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "[2001:db8:1:2:aaaa::1]:443"
+	a := clientAddr(r)
+	r.RemoteAddr = "[2001:db8:1:2:bbbb::9]:443"
+	if b := clientAddr(r); a != b || a != "2001:db8:1:2::/64" {
+		t.Fatalf("got %q and %q", a, b)
+	}
+	r.RemoteAddr = "192.0.2.4:80"
+	if c := clientAddr(r); c != "192.0.2.4" {
+		t.Fatalf("ipv4: %q", c)
 	}
 }

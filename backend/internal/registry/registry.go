@@ -510,6 +510,8 @@ func (c *Client) List(ctx context.Context, ttl time.Duration, refresh bool) (Lis
 	// not cached, so the next poll retries instead of serving it for the ttl.
 	if complete {
 		c.cache, c.cachedAt = l, time.Now()
+	} else {
+		c.cache = Listing{} // an older listing must not stand in for this failed one
 	}
 	return l, nil
 }

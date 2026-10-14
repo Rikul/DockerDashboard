@@ -44,6 +44,7 @@ type Server struct {
 
 	loginMu       sync.Mutex
 	loginAttempts map[string]*attempts // by client address
+	loginPruned   time.Time
 
 	// streams is cancelled when shutdown begins, ending long-lived log
 	// streams while ordinary requests are left to finish.

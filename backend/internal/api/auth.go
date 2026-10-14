@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -52,31 +53,50 @@ func (s *Server) attemptsFor(addr string) *attempts {
 	if s.loginAttempts == nil {
 		s.loginAttempts = map[string]*attempts{}
 	}
-	a := s.loginAttempts[addr]
-	if a == nil {
-		if len(s.loginAttempts) >= maxTracked {
-			for k, v := range s.loginAttempts {
-				if v.mu.TryLock() {
-					stale := time.Since(v.lastFail) > failWindow
-					v.mu.Unlock()
-					if stale {
-						delete(s.loginAttempts, k)
-					}
+	if a := s.loginAttempts[addr]; a != nil {
+		return a
+	}
+	if len(s.loginAttempts) >= maxTracked && time.Since(s.loginPruned) > time.Minute {
+		s.loginPruned = time.Now()
+		for k, v := range s.loginAttempts {
+			if v.mu.TryLock() {
+				stale := time.Since(v.lastFail) > failWindow
+				v.mu.Unlock()
+				if stale {
+					delete(s.loginAttempts, k)
 				}
 			}
 		}
-		a = &attempts{}
-		s.loginAttempts[addr] = a
 	}
+	if len(s.loginAttempts) >= maxTracked {
+		// Still full of recent failures: new addresses share one bucket
+		// rather than growing the map, so they are throttled together.
+		addr = overflowAddr
+		if a := s.loginAttempts[addr]; a != nil {
+			return a
+		}
+	}
+	a := &attempts{}
+	s.loginAttempts[addr] = a
 	return a
 }
 
+// overflowAddr is the shared bucket used once maxTracked addresses are
+// tracked. It is not a valid address, so no real client maps to it.
+const overflowAddr = "overflow"
+
 // clientAddr is the address failures are counted against. It is the TCP
-// peer: X-Forwarded-For is not trusted, since any client can set it.
+// peer: X-Forwarded-For is not trusted, since any client can set it. IPv6
+// peers are grouped by /64, since one host usually controls a whole /64.
 func clientAddr(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if ip, err := netip.ParseAddr(host); err == nil && ip.Is6() && !ip.Is4In6() {
+		if p, err := ip.Prefix(64); err == nil {
+			return p.String()
+		}
 	}
 	return host
 }

@@ -197,6 +197,15 @@ func TestTransientDescribeFailureIsNotCached(t *testing.T) {
 	if len(l.Tags) != 1 || l.Tags[0].Error == "" || len(l.Problems) == 0 {
 		t.Fatalf("want an unreadable tag and a problem, got %+v", l)
 	}
+	// A forced refresh that fails must not leave an older good listing to
+	// be served by the next ordinary request.
+	fail = false
+	c.List(t.Context(), time.Minute, true)
+	fail = true
+	c.List(t.Context(), time.Minute, true)
+	if c.cache.Tags != nil {
+		t.Fatal("a failed refresh left the previous listing cached")
+	}
 	fail = false
 	if l, _ = c.List(t.Context(), time.Minute, false); l.Tags[0].Error != "" {
 		t.Fatalf("the failed listing was cached: %+v", l.Tags[0])
