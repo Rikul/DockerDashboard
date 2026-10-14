@@ -1,0 +1,50 @@
+# Docker Dashboard
+#
+#   echo "DASHBOARD_TOKEN=$(openssl rand -hex 24)" > .env
+#   docker compose up -d --build
+#
+# then open http://localhost:8080 and sign in with that token.
+
+services:
+  dashboard:
+    build: .
+    image: docker-dashboard:local
+    restart: unless-stopped
+    ports:
+      # Bound to localhost by default. Put a TLS reverse proxy in front
+      # before exposing it to a network.
+      - "127.0.0.1:8080:8080"
+    environment:
+      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?set DASHBOARD_TOKEN in .env}
+      READ_ONLY: ${READ_ONLY:-false}
+      # Optional private registry for the Registry tab:
+      REGISTRY_URL: ${REGISTRY_URL:-}
+      REGISTRY_USERNAME: ${REGISTRY_USERNAME:-}
+      REGISTRY_PASSWORD: ${REGISTRY_PASSWORD:-}
+    volumes:
+      # Full control of Docker. Note: ":ro" on a socket does NOT make the API
+      # read-only; use READ_ONLY=true or the socket proxy below for that.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # ---- Hardened alternative: talk to Docker through a filtering proxy.
+  # Remove the socket mount above, set DOCKER_HOST=tcp://socket-proxy:2375 on
+  # the dashboard, and enable this service. Flip POST/DELETE to 0 for a
+  # strictly read-only dashboard.
+  #
+  # socket-proxy:
+  #   image: tecnativa/docker-socket-proxy:latest
+  #   restart: unless-stopped
+  #   environment:
+  #     CONTAINERS: 1
+  #     IMAGES: 1
+  #     VOLUMES: 1
+  #     NETWORKS: 1
+  #     INFO: 1
+  #     SYSTEM: 1
+  #     POST: 1
+  #     DELETE: 1
+  #     ALLOW_START: 1
+  #     ALLOW_STOP: 1
+  #     ALLOW_RESTARTS: 1
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro

@@ -31,3 +31,12 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Docker Dashboard
+bin/
+node_modules/
+frontend/node_modules/
+*.tsbuildinfo
+# Frontend build output embedded by the Go server (placeholder is tracked)
+backend/internal/web/dist/*
+!backend/internal/web/dist/.gitkeep

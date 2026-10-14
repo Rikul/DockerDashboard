@@ -1,0 +1,8 @@
+.git
+.github
+**/node_modules
+bin
+backend/internal/web/dist/*
+!backend/internal/web/dist/.gitkeep
+*.md
+.env
