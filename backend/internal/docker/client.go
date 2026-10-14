@@ -27,8 +27,9 @@ type Client struct {
 	stream *http.Client
 	base   string // e.g. "http://docker" or "http://10.0.0.5:2375"
 
-	apiMu  sync.Mutex
-	apiVer string // daemon API version, once known
+	apiMu    sync.Mutex
+	apiVer   string // daemon API version as reported, once known
+	apiKnown bool
 }
 
 // Error is a non-2xx response from the daemon.
@@ -351,23 +352,24 @@ func (c *Client) RemoveVolume(ctx context.Context, name string, force bool) erro
 func (c *Client) apiVersion(ctx context.Context) (string, error) {
 	c.apiMu.Lock()
 	defer c.apiMu.Unlock()
-	if c.apiVer == "" {
+	if !c.apiKnown {
 		v, err := c.Version(ctx)
 		if err != nil {
 			return "", err
 		}
-		c.apiVer = v.APIVersion
+		c.apiVer, c.apiKnown = v.APIVersion, true
 	}
 	return c.apiVer, nil
 }
 
-// apiAtLeast reports whether API version v is at least major.minor.
-func apiAtLeast(v string, major, minor int) bool {
+// apiBefore reports whether API version v is known to be older than
+// major.minor. An unparseable version is not known to be older.
+func apiBefore(v string, major, minor int) bool {
 	var ma, mi int
 	if _, err := fmt.Sscanf(v, "%d.%d", &ma, &mi); err != nil {
 		return false
 	}
-	return ma > major || ma == major && mi >= minor
+	return ma < major || ma == major && mi < minor
 }
 
 // PruneVolumes removes unused volumes. With all=false only anonymous ones
@@ -381,7 +383,9 @@ func (c *Client) PruneVolumes(ctx context.Context, all bool) (PruneReport, error
 	if err != nil {
 		return out, err
 	}
-	modern := apiAtLeast(ver, 1, 42)
+	// If the version can't be read, send the filter: older daemons ignore
+	// unknown filters and prune named volumes anyway.
+	modern := !apiBefore(ver, 1, 42)
 	q := url.Values{}
 	switch {
 	case all && modern:
@@ -398,13 +402,6 @@ func (c *Client) PruneVolumes(ctx context.Context, all bool) (PruneReport, error
 func (c *Client) ListNetworks(ctx context.Context) ([]Network, error) {
 	var out []Network
 	err := c.call(ctx, http.MethodGet, "/networks", nil, nil, &out)
-	return out, err
-}
-
-// InspectNetwork includes the attached containers, which the list omits.
-func (c *Client) InspectNetwork(ctx context.Context, id string) (Network, error) {
-	var out Network
-	err := c.call(ctx, http.MethodGet, "/networks/"+url.PathEscape(id), nil, nil, &out)
 	return out, err
 }
 

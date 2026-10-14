@@ -318,3 +318,39 @@ func TestConcurrentListsShareOneScan(t *testing.T) {
 		t.Fatalf("want one scan for concurrent requests, got %d", n)
 	}
 }
+
+func TestPaginationLinkIsPinnedToEndpoint(t *testing.T) {
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
+		if r.URL.Path == "/v2/_catalog" {
+			w.Header().Set("Link", `<https://evil.example/admin/secrets?x=1>; rel="next"`)
+			json.NewEncoder(w).Encode(map[string]any{"repositories": []string{"a"}})
+		}
+	}))
+	defer srv.Close()
+	c, _ := New(Config{URL: srv.URL})
+	if _, err := c.Repositories(t.Context()); err == nil {
+		t.Fatal("want an error for a link to another endpoint")
+	}
+	if len(hits) != 1 {
+		t.Fatalf("followed a hostile link: %v", hits)
+	}
+}
+
+func TestExactFitCatalogWithTrailingLink(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Always sends a next link, even when nothing follows.
+		w.Header().Set("Link", `</v2/_catalog?n=3&last=c>; rel="next"`)
+		if r.URL.Query().Get("last") == "" {
+			json.NewEncoder(w).Encode(map[string]any{"repositories": []string{"a", "b", "c"}})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"repositories": []string{}})
+	}))
+	defer srv.Close()
+	c, _ := New(Config{URL: srv.URL, MaxRepos: 3})
+	if repos, more, err := c.repositories(t.Context()); err != nil || more || len(repos) != 3 {
+		t.Fatalf("want 3 repos and more=false, got %v more=%v err=%v", repos, more, err)
+	}
+}

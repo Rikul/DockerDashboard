@@ -265,10 +265,21 @@ func (c *Client) getJSONPage(ctx context.Context, path, scope string, out any) (
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out); err != nil {
 		return "", err
 	}
-	return nextLink(resp.Header.Get("Link")), nil
+	next := nextLink(resp.Header.Get("Link"))
+	if next == "" {
+		return "", nil
+	}
+	// Credentials go with every request, so only follow a link back to the
+	// same endpoint on the configured host; it may only change the query.
+	u, err := url.Parse(next)
+	pagePath, _, _ := strings.Cut(path, "?")
+	if err != nil || (u.Host != "" && u.Host != c.base.Host) || u.Path != pagePath {
+		return "", fmt.Errorf("registry: refusing pagination link %q for %s", next, pagePath)
+	}
+	return pagePath + "?" + u.RawQuery, nil
 }
 
-// nextLink extracts the path and query of a `<url>; rel="next"` Link header.
+// nextLink extracts the URL of a `<url>; rel="next"` Link header.
 func nextLink(h string) string {
 	for _, part := range strings.Split(h, ",") {
 		target, params, ok := strings.Cut(strings.TrimSpace(part), ";")
@@ -279,11 +290,7 @@ func nextLink(h string) string {
 		if !strings.HasPrefix(target, "<") || !strings.HasSuffix(target, ">") {
 			continue
 		}
-		u, err := url.Parse(target[1 : len(target)-1])
-		if err != nil || u.Path == "" {
-			continue
-		}
-		return u.RequestURI()
+		return target[1 : len(target)-1]
 	}
 	return ""
 }
@@ -297,26 +304,34 @@ func (c *Client) Repositories(ctx context.Context) ([]string, error) {
 // repositories reads the catalog, following its pagination, up to MaxRepos
 // names. more reports whether the registry has further repositories.
 func (c *Client) repositories(ctx context.Context) (repos []string, more bool, err error) {
+	type page struct {
+		Repositories []string `json:"repositories"`
+	}
 	path := fmt.Sprintf("/v2/_catalog?n=%d", c.cfg.MaxRepos)
-	for page := 0; path != ""; page++ {
-		if len(repos) >= c.cfg.MaxRepos {
-			return repos[:c.cfg.MaxRepos], true, nil
-		}
-		if page >= 1000 {
+	for n := 0; path != ""; n++ {
+		if n >= 1000 {
 			return repos, true, nil
 		}
-		var out struct {
-			Repositories []string `json:"repositories"`
-		}
+		var out page
 		next, err := c.getJSONPage(ctx, path, "registry:catalog:*", &out)
 		if err != nil {
 			return repos, false, err
 		}
 		repos = append(repos, out.Repositories...)
 		path = next
-	}
-	if len(repos) > c.cfg.MaxRepos {
-		return repos[:c.cfg.MaxRepos], true, nil
+		switch {
+		case len(repos) > c.cfg.MaxRepos:
+			return repos[:c.cfg.MaxRepos], true, nil
+		case len(repos) == c.cfg.MaxRepos && path != "":
+			// Exactly full, and the registry offers another page: some
+			// send a link even on their last page, so look before
+			// reporting that repositories were left out.
+			var peek page
+			if _, err := c.getJSONPage(ctx, path, "registry:catalog:*", &peek); err != nil {
+				return repos, true, nil
+			}
+			return repos, len(peek.Repositories) > 0, nil
+		}
 	}
 	return repos, false, nil
 }

@@ -110,11 +110,14 @@ func TestPruneVolumesByAPIVersion(t *testing.T) {
 		{"1.45", false, "", false},
 		{"1.41", true, "", false},
 		{"1.41", false, "", true},
+		{"", true, `{"all":["true"]}`, false}, // unknown version: send the filter
 	} {
 		var gotFilter string
+		versionCalls := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/version":
+				versionCalls++
 				json.NewEncoder(w).Encode(map[string]string{"ApiVersion": tc.api})
 			case "/volumes/prune":
 				gotFilter = r.URL.Query().Get("filters")
@@ -123,7 +126,11 @@ func TestPruneVolumesByAPIVersion(t *testing.T) {
 		}))
 		c, _ := New("tcp://" + strings.TrimPrefix(srv.URL, "http://"))
 		_, err := c.PruneVolumes(t.Context(), tc.all)
+		c.PruneVolumes(t.Context(), tc.all)
 		srv.Close()
+		if versionCalls != 1 {
+			t.Errorf("api %q: /version asked %d times, want once", tc.api, versionCalls)
+		}
 		if (err != nil) != tc.wantErr || gotFilter != tc.wantFilter {
 			t.Errorf("api %s all=%v: filter %q err %v", tc.api, tc.all, gotFilter, err)
 		}

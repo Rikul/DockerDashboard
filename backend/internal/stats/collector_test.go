@@ -121,3 +121,31 @@ func TestHistoryKeepsRunningContainerAfterFailedStatsRead(t *testing.T) {
 		t.Fatalf("a failed stats read hid a running container: %+v", h)
 	}
 }
+
+type stateSource struct {
+	fakeSource
+	busyState string
+}
+
+func (f *stateSource) ListContainers(ctx context.Context, all bool) ([]docker.Container, error) {
+	list, err := f.fakeSource.ListContainers(ctx, all)
+	if f.busyState != "" {
+		list[0].State = f.busyState
+	}
+	return list, err
+}
+
+func TestHistoryKeepsPausedAndRestartingContainers(t *testing.T) {
+	for _, state := range []string{"paused", "restarting"} {
+		src := &stateSource{}
+		c := New(src, time.Second, time.Minute)
+		for range 3 {
+			c.tick(context.Background())
+		}
+		src.busyState = state
+		c.tick(context.Background())
+		if h := c.History(time.Time{}); len(h) != 2 {
+			t.Errorf("%s container dropped out of history: %+v", state, h)
+		}
+	}
+}
