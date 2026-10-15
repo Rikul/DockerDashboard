@@ -162,7 +162,15 @@ export function LogViewer({ id, name, onClose }: { id: string; name: string; onC
         }}
       >
         {shown.length === 0 ? (
-          <div className="muted">{status === 'connecting' ? 'Connecting…' : filter ? 'No matching lines' : 'No output'}</div>
+          <div className={endError && !lines.length ? 'bad-text' : 'muted'}>
+            {status === 'connecting'
+              ? 'Connecting…'
+              : endError && !lines.length
+                ? `Couldn't read logs: ${endError}`
+                : filter
+                  ? 'No matching lines'
+                  : 'No output'}
+          </div>
         ) : (
           shown.map((l, i) => (
             <div key={i} className={l.stream === 'stderr' ? 'stderr' : undefined}>
@@ -174,7 +182,7 @@ export function LogViewer({ id, name, onClose }: { id: string; name: string; onC
       <p className="sub">
         {shown.length.toLocaleString()} lines{filter ? ` matching (of ${lines.length.toLocaleString()})` : ''} · stderr in red
         {lines.length >= MAX_LINES ? ` · keeping the newest ${MAX_LINES.toLocaleString()}` : ''}
-        {endError ? ` · the log stream failed, so output may be incomplete: ${endError}` : ''}
+        {endError && lines.length ? ` · the log stream failed, so output may be incomplete: ${endError}` : ''}
       </p>
     </Modal>
   );

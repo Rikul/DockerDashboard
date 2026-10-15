@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"sort"
@@ -317,15 +318,54 @@ func (s *Server) handleContainersPrune(w http.ResponseWriter, r *http.Request) {
 
 // handleContainerLogs streams logs as Server-Sent Events: each event's data
 // is a JSON LogLine. With follow=0 the stream ends after the tail.
+//
+// EventSource can't read the body of a failed response, so errors opening
+// the stream are also sent as an "end" event with the reason, on a 200.
 func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	// End the stream when the client goes away or the server shuts down.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer context.AfterFunc(s.streamCtx(), cancel)()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	startStream := func() {
+		h := w.Header()
+		h.Set("Content-Type", "text/event-stream")
+		h.Set("Cache-Control", "no-store")
+		h.Set("X-Accel-Buffering", "no") // let nginx pass events through
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+	}
+	// fail ends the stream with err, prefixed by why the logs are missing
+	// when that is known.
+	fail := func(err error, why string) {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		reason := err.Error()
+		if de := (*docker.Error)(nil); errors.As(err, &de) {
+			reason = de.Message
+		}
+		if why != "" {
+			reason = why + ": " + reason
+		}
+		if docker.StatusCode(err) >= 500 {
+			slog.Warn("container logs unavailable", "err", err)
+		}
+		startStream()
+		b, _ := json.Marshal(map[string]string{"reason": reason})
+		fmt.Fprintf(w, "event: end\ndata: %s\n\n", b)
+		flusher.Flush()
+	}
+
 	id := r.PathValue("id")
 	in, err := s.docker.InspectContainer(ctx, id)
 	if err != nil {
-		dockerError(w, err)
+		fail(err, "")
 		return
 	}
 	tail := r.URL.Query().Get("tail")
@@ -335,22 +375,16 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	follow := r.URL.Query().Get("follow") != "0"
 	rc, err := s.docker.ContainerLogs(ctx, id, docker.LogOptions{Tail: tail, Follow: follow, Timestamps: queryBool(r, "timestamps")})
 	if err != nil {
-		dockerError(w, err)
+		why := ""
+		if d := in.HostConfig.LogConfig.Type; docker.StatusCode(err) == http.StatusNotImplemented && d != "" {
+			// e.g. --log-driver none, or a remote driver such as syslog.
+			why = "the container's logging driver (" + d + ") doesn't keep logs Docker can read"
+		}
+		fail(err, why)
 		return
 	}
 	defer rc.Close()
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming unsupported")
-		return
-	}
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-store")
-	h.Set("X-Accel-Buffering", "no") // let nginx pass events through
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
+	startStream()
 
 	lines := make(chan docker.LogLine, 256)
 	errc := make(chan error, 1)

@@ -96,6 +96,9 @@ type ContainerJSON struct {
 		RestartPolicy struct {
 			Name string `json:"Name"`
 		} `json:"RestartPolicy"`
+		LogConfig struct {
+			Type string `json:"Type"`
+		} `json:"LogConfig"`
 	} `json:"HostConfig"`
 }
 

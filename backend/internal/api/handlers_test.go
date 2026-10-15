@@ -77,3 +77,20 @@ func TestRegistryDeleteRejectsInvalidNames(t *testing.T) {
 		t.Fatalf("want 400, got %d %s", w.Code, w.Body)
 	}
 }
+
+func TestContainerLogsUnreadableDriver(t *testing.T) {
+	// The daemon answers 501 for --log-driver none. EventSource can't read a
+	// failed response, so the reason must arrive as an "end" event on a 200.
+	inspect := map[string]any{"Id": "c1", "HostConfig": map[string]any{"LogConfig": map[string]any{"Type": "none"}}}
+	s := &Server{docker: fakeDocker(t, map[string]any{"/containers/c1/json": inspect, "/containers/c1/logs": 501})}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/containers/{id}/logs", s.handleContainerLogs)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c1/logs?follow=0", nil))
+	if w.Code != 200 || w.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("want a 200 event stream, got %d %q", w.Code, w.Header().Get("Content-Type"))
+	}
+	if b := w.Body.String(); !strings.HasPrefix(b, "event: end\n") || !strings.Contains(b, "logging driver (none)") {
+		t.Fatalf("want an end event naming the driver, got %q", b)
+	}
+}
