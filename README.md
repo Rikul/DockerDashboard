@@ -5,7 +5,7 @@ A self-hosted web dashboard for one Docker host. It covers containers, images, v
 - **Overview**: running and stopped containers, a list of what needs attention (restart loops, failing health checks, crashes, OOM kills, memory near its limit), disk use, reclaimable space, CPU over the last hour and memory against limits.
 - **Containers**: search, filter and sort. Start, stop, restart, pause, remove, live logs (follow, filter, download) and inspect.
 - **Images**: size, age, which are in use, unused and dangling. Pull, update a tag, remove, prune.
-- **Volumes**: size, which container mounts each one, anonymous vs named. Create, delete, prune.
+- **Volumes**: size, which container mounts each one, anonymous vs named. Create, inspect (driver options with credentials redacted), delete, prune.
 - **Networks**: subnet, gateway, attached containers. Create, connect and disconnect containers, remove, prune.
 - **Registry**: tags in any Registry API v2 registry (distribution, Harbor, GitLab, GHCR…) with size, build date and platforms. Pull to the host, delete a tag.
 
@@ -80,7 +80,7 @@ All endpoints are under `/api` and return JSON.
 | POST | `/containers/{id}/{start,stop,restart,pause,unpause,kill}` | Lifecycle |
 | DELETE | `/containers/{id}?force=&volumes=` · POST `/containers/prune` | Remove |
 | GET | `/images`, `/images/{id}` · POST `/images/pull` `{"ref"}` · DELETE `/images/{id}` · POST `/images/prune?all=` | Images |
-| GET, POST | `/volumes` · DELETE `/volumes/{name}` · POST `/volumes/prune?all=` | Volumes |
+| GET, POST | `/volumes` · GET, DELETE `/volumes/{name}` · POST `/volumes/prune?all=` | Volumes |
 | GET, POST | `/networks` · DELETE `/networks/{id}` · POST `/networks/{id}/{connect,disconnect}` · POST `/networks/prune` | Networks |
 | GET | `/registry?refresh=` · DELETE `/registry/{repo}?tag=` | Registry |
 

@@ -336,6 +336,12 @@ func (c *Client) ListVolumes(ctx context.Context) ([]Volume, error) {
 	return out.Volumes, err
 }
 
+func (c *Client) InspectVolume(ctx context.Context, name string) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.call(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil, nil, &out)
+	return out, err
+}
+
 func (c *Client) CreateVolume(ctx context.Context, name, driver string, labels map[string]string) (Volume, error) {
 	var out Volume
 	body := map[string]any{"Name": name, "Driver": driver, "Labels": labels}

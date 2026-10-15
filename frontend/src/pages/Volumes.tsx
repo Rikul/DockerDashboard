@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { api } from '../api';
 import { useActions } from '../actions';
 import { DataTable, type Column, type Filter } from '../components/DataTable';
+import { InspectViewer } from '../components/LogViewer';
 import { Bar, Button, Card, ErrorLine, Pill, Skeleton } from '../components/ui';
 import { fmtAgo, fmtBytes, shortHashes, sumSize, unusedVolumes } from '../format';
 import type { Poll } from '../hooks';
@@ -15,6 +17,7 @@ const filters: Filter<Volume>[] = [
 
 export function VolumesPage({ poll }: { poll: Poll<Volume[]> }) {
   const { run, prompt, readOnly } = useActions();
+  const [inspect, setInspect] = useState<Volume | null>(null);
   const rows = poll.data ?? [];
   const maxSize = Math.max(1, ...rows.map((v) => v.size));
   const unused = unusedVolumes(rows);
@@ -86,27 +89,30 @@ export function VolumesPage({ poll }: { poll: Poll<Volume[]> }) {
           searchPlaceholder="Search volumes…"
           filters={filters}
           initialSort={{ key: 'size', dir: 'desc' }}
-          actions={(v) =>
-            !readOnly && v.used_by.length === 0 ? (
-              <Button
-                danger
-                onClick={() =>
-                  run(() => api.removeVolume(v.name), {
-                    confirm: {
-                      title: `Delete volume ${v.name}?`,
-                      body: <p>Its data ({v.size >= 0 ? fmtBytes(v.size) : 'unknown size'}) is permanently deleted. Back it up first if you might need it.</p>,
-                      confirmLabel: 'Delete',
-                      danger: true,
-                    },
-                    success: `Volume ${v.name} deleted`,
-                    after: () => poll.refresh(),
-                  })
-                }
-              >
-                Delete
-              </Button>
-            ) : null
-          }
+          actions={(v) => (
+            <>
+              <Button onClick={() => setInspect(v)}>Inspect</Button>
+              {!readOnly && v.used_by.length === 0 && (
+                <Button
+                  danger
+                  onClick={() =>
+                    run(() => api.removeVolume(v.name), {
+                      confirm: {
+                        title: `Delete volume ${v.name}?`,
+                        body: <p>Its data ({v.size >= 0 ? fmtBytes(v.size) : 'unknown size'}) is permanently deleted. Back it up first if you might need it.</p>,
+                        confirmLabel: 'Delete',
+                        danger: true,
+                      },
+                      success: `Volume ${v.name} deleted`,
+                      after: () => poll.refresh(),
+                    })
+                  }
+                >
+                  Delete
+                </Button>
+              )}
+            </>
+          )}
           toolbar={
             !readOnly && (
               <>
@@ -141,6 +147,7 @@ export function VolumesPage({ poll }: { poll: Poll<Volume[]> }) {
           }
         />
       )}
+      {inspect && <InspectViewer title={`Inspect · ${inspect.name}`} load={() => api.inspectVolume(inspect.name)} onClose={() => setInspect(null)} />}
     </Card>
   );
 }

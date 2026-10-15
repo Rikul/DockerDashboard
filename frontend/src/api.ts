@@ -73,6 +73,7 @@ export const api = {
   pruneImages: (all: boolean) => request<PruneReport>('POST', `/api/images/prune?all=${all}`),
 
   volumes: (refresh = false) => request<Volume[]>('GET', `/api/volumes${refresh ? '?refresh=1' : ''}`),
+  inspectVolume: (name: string) => request<unknown>('GET', `/api/volumes/${enc(name)}`),
   createVolume: (name: string, driver = 'local') => request<unknown>('POST', '/api/volumes', { name, driver }),
   removeVolume: (name: string, force = false) => request<unknown>('DELETE', `/api/volumes/${enc(name)}?force=${force}`),
   pruneVolumes: (all: boolean) => request<PruneReport>('POST', `/api/volumes/prune?all=${all}`),

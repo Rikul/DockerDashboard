@@ -664,6 +664,53 @@ func (s *Server) handleVolumes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *Server) handleVolumeInspect(w http.ResponseWriter, r *http.Request) {
+	data, err := s.docker.InspectVolume(r.Context(), r.PathValue("name"))
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	out, err := redactVolumeInspect(data)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "decode volume inspect: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// secretKey matches option names that hold credentials, such as the
+// password in a CIFS volume's "o" option.
+var secretKey = regexp.MustCompile(`(?i)pass|secret|token|cred|key`)
+
+// redactVolumeInspect hides credentials in a raw volume inspect's driver
+// options: an option whose name looks secret, and secret-looking k=v parts
+// of comma-separated mount options ("o": "addr=nas,username=u,password=p").
+func redactVolumeInspect(data []byte) (map[string]any, error) {
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	opts, _ := m["Options"].(map[string]any)
+	for k, v := range opts {
+		if secretKey.MatchString(k) {
+			opts[k] = "REDACTED"
+			continue
+		}
+		str, ok := v.(string)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(str, ",")
+		for i, part := range parts {
+			if name, _, ok := strings.Cut(part, "="); ok && secretKey.MatchString(name) {
+				parts[i] = name + "=REDACTED"
+			}
+		}
+		opts[k] = strings.Join(parts, ",")
+	}
+	return m, nil
+}
+
 func (s *Server) handleVolumeCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name   string `json:"name"`

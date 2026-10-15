@@ -94,3 +94,25 @@ func TestContainerLogsUnreadableDriver(t *testing.T) {
 		t.Fatalf("want an end event naming the driver, got %q", b)
 	}
 }
+
+func TestVolumeInspectRedactsCredentials(t *testing.T) {
+	vol := map[string]any{
+		"Name": "share", "Driver": "local",
+		"Options": map[string]any{"type": "cifs", "device": "//nas/share", "o": "addr=nas,username=bob,password=hunter2,vers=3.0", "passphrase": "x"},
+	}
+	s := &Server{docker: fakeDocker(t, map[string]any{"/volumes/share": vol})}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/volumes/{name}", s.handleVolumeInspect)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/volumes/share", nil))
+	if w.Code != 200 {
+		t.Fatalf("status %d %s", w.Code, w.Body)
+	}
+	b := w.Body.String()
+	if strings.Contains(b, "hunter2") || !strings.Contains(b, "password=REDACTED") || !strings.Contains(b, `"passphrase":"REDACTED"`) {
+		t.Fatalf("credentials not redacted: %s", b)
+	}
+	if !strings.Contains(b, "username=bob") || !strings.Contains(b, "//nas/share") {
+		t.Fatalf("non-secret options lost: %s", b)
+	}
+}

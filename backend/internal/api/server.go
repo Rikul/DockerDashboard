@@ -113,6 +113,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Volumes
 	mux.HandleFunc("GET /api/volumes", s.handleVolumes)
+	mux.HandleFunc("GET /api/volumes/{name}", s.handleVolumeInspect)
 	mux.HandleFunc("POST /api/volumes", s.handleVolumeCreate)
 	mux.HandleFunc("DELETE /api/volumes/{name}", s.handleVolumeRemove)
 	mux.HandleFunc("POST /api/volumes/prune", s.handleVolumesPrune)
