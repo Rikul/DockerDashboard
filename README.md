@@ -6,7 +6,7 @@ A self-hosted web dashboard for one Docker host. It covers containers, images, v
 - **Containers**: search, filter and sort. Start, stop, restart, pause, remove, live logs (follow, filter, download) and inspect.
 - **Images**: size, age, which are in use, unused and dangling. Pull, update a tag, remove, prune.
 - **Volumes**: size, which container mounts each one, anonymous vs named. Create, inspect (driver options with credentials redacted), delete, prune.
-- **Networks**: subnet, gateway, attached containers. Create, connect and disconnect containers, remove, prune.
+- **Networks**: subnet, gateway, attached containers. Create, inspect, connect and disconnect containers, remove, prune.
 - **Registry**: tags in any Registry API v2 registry (distribution, Harbor, GitLab, GHCR…) with size, build date and platforms. Pull to the host, delete a tag.
 
 **Stack:** Go (standard library only, no third-party modules) and React 19 + TypeScript (Vite, d3 for charts). Everything ships as one static binary with the frontend embedded, in a distroless image.
@@ -81,7 +81,7 @@ All endpoints are under `/api` and return JSON.
 | DELETE | `/containers/{id}?force=&volumes=` · POST `/containers/prune` | Remove |
 | GET | `/images`, `/images/{id}` · POST `/images/pull` `{"ref"}` · DELETE `/images/{id}` · POST `/images/prune?all=` | Images |
 | GET, POST | `/volumes` · GET, DELETE `/volumes/{name}` · POST `/volumes/prune?all=` | Volumes |
-| GET, POST | `/networks` · DELETE `/networks/{id}` · POST `/networks/{id}/{connect,disconnect}` · POST `/networks/prune` | Networks |
+| GET, POST | `/networks` · GET, DELETE `/networks/{id}` · POST `/networks/{id}/{connect,disconnect}` · POST `/networks/prune` | Networks |
 | GET | `/registry?refresh=` · DELETE `/registry/{repo}?tag=` | Registry |
 
 ## Layout

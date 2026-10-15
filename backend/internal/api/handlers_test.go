@@ -116,3 +116,20 @@ func TestVolumeInspectRedactsCredentials(t *testing.T) {
 		t.Fatalf("non-secret options lost: %s", b)
 	}
 }
+
+func TestNetworkInspect(t *testing.T) {
+	net := map[string]any{"Id": "n1", "Name": "app_default", "Driver": "bridge"}
+	s := &Server{docker: fakeDocker(t, map[string]any{"/networks/n1": net})}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/networks/{id}", s.handleNetworkInspect)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/networks/n1", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"Name":"app_default"`) {
+		t.Fatalf("status %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/networks/gone", nil))
+	if w.Code != 404 {
+		t.Fatalf("want the daemon's 404, got %d %s", w.Code, w.Body)
+	}
+}

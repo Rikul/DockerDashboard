@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Networks
 	mux.HandleFunc("GET /api/networks", s.handleNetworks)
+	mux.HandleFunc("GET /api/networks/{id}", s.handleNetworkInspect)
 	mux.HandleFunc("POST /api/networks", s.handleNetworkCreate)
 	mux.HandleFunc("DELETE /api/networks/{id}", s.handleNetworkRemove)
 	mux.HandleFunc("POST /api/networks/{id}/connect", s.handleNetworkConnect)

@@ -797,6 +797,15 @@ func (s *Server) handleNetworks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *Server) handleNetworkInspect(w http.ResponseWriter, r *http.Request) {
+	data, err := s.docker.InspectNetwork(r.Context(), r.PathValue("id"))
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
 func (s *Server) handleNetworkCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name     string `json:"name"`

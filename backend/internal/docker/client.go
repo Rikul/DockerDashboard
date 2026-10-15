@@ -411,6 +411,12 @@ func (c *Client) ListNetworks(ctx context.Context) ([]Network, error) {
 	return out, err
 }
 
+func (c *Client) InspectNetwork(ctx context.Context, id string) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.call(ctx, http.MethodGet, "/networks/"+url.PathEscape(id), nil, nil, &out)
+	return out, err
+}
+
 func (c *Client) CreateNetwork(ctx context.Context, name, driver string, internal bool) (string, error) {
 	var out struct {
 		ID string `json:"Id"`

@@ -1,12 +1,15 @@
+import { useState } from 'react';
 import { api } from '../api';
 import { useActions } from '../actions';
 import { DataTable, type Column } from '../components/DataTable';
+import { InspectViewer } from '../components/LogViewer';
 import { Button, Card, ErrorLine, Pill, Skeleton } from '../components/ui';
 import type { Poll } from '../hooks';
 import type { Container, Network } from '../types';
 
 export function NetworksPage({ poll, containers, onChanged }: { poll: Poll<Network[]>; containers: Container[]; onChanged: () => void }) {
   const { run, prompt, readOnly } = useActions();
+  const [inspect, setInspect] = useState<Network | null>(null);
   const rows = poll.data ?? [];
   const refresh = async () => {
     await poll.refresh();
@@ -111,6 +114,7 @@ export function NetworksPage({ poll, containers, onChanged }: { poll: Poll<Netwo
           initialSort={{ key: 'containers', dir: 'desc' }}
           actions={(n) => (
             <>
+              <Button onClick={() => setInspect(n)}>Inspect</Button>
               {joinable(n) && <Button onClick={() => void connect(n)}>Connect</Button>}
               {!readOnly && !n.builtin && n.containers.length === 0 && (
                 <Button
@@ -157,6 +161,7 @@ export function NetworksPage({ poll, containers, onChanged }: { poll: Poll<Netwo
           }
         />
       )}
+      {inspect && <InspectViewer title={`Inspect · ${inspect.name}`} load={() => api.inspectNetwork(inspect.id)} onClose={() => setInspect(null)} />}
     </Card>
   );
 }

@@ -79,6 +79,7 @@ export const api = {
   pruneVolumes: (all: boolean) => request<PruneReport>('POST', `/api/volumes/prune?all=${all}`),
 
   networks: () => request<Network[]>('GET', '/api/networks'),
+  inspectNetwork: (id: string) => request<unknown>('GET', `/api/networks/${enc(id)}`),
   createNetwork: (name: string, driver: string, internal: boolean) =>
     request<{ id: string }>('POST', '/api/networks', { name, driver, internal }),
   removeNetwork: (id: string) => request<unknown>('DELETE', `/api/networks/${enc(id)}`),
