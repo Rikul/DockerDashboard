@@ -4,7 +4,7 @@ import { useActions } from '../actions';
 import { DataTable, type Column, type Filter } from '../components/DataTable';
 import { InspectViewer } from '../components/LogViewer';
 import { Bar, Button, Card, ErrorLine, Pill, Skeleton } from '../components/ui';
-import { fmtAgo, fmtBytes, reclaimableImages, sumSize } from '../format';
+import { fmtAgo, fmtBytes, reclaimableImages, shortHashes, sumSize } from '../format';
 import type { Poll } from '../hooks';
 import type { Image } from '../types';
 
@@ -93,7 +93,9 @@ export function ImagesPage({ poll, onChanged, filter, onFilter }: { poll: Poll<I
       sort: (i) => i.ref,
       render: (i) => (
         <div className="name-cell">
-          <span className={`mono${i.dangling ? ' muted' : ''}`}>{i.ref}</span>
+          <span className={`mono clip${i.dangling ? ' muted' : ''}`} title={i.ref}>
+            {shortHashes(i.ref)}
+          </span>
           {i.repo_tags.length > 1 && <span className="muted small">+{i.repo_tags.length - 1} more tags</span>}
           {i.dangling && <Pill tone="warn">dangling</Pill>}
         </div>

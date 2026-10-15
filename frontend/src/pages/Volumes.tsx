@@ -2,7 +2,7 @@ import { api } from '../api';
 import { useActions } from '../actions';
 import { DataTable, type Column, type Filter } from '../components/DataTable';
 import { Bar, Button, Card, ErrorLine, Pill, Skeleton } from '../components/ui';
-import { fmtAgo, fmtBytes, sumSize, unusedVolumes } from '../format';
+import { fmtAgo, fmtBytes, shortHashes, sumSize, unusedVolumes } from '../format';
 import type { Poll } from '../hooks';
 import type { Volume } from '../types';
 
@@ -47,7 +47,12 @@ export function VolumesPage({ poll }: { poll: Poll<Volume[]> }) {
       sort: (v) => v.used_by.join(','),
       render: (v) => (v.used_by.length ? <span>{v.used_by.join(', ')}</span> : <Pill tone="warn">unused</Pill>),
     },
-    { key: 'mountpoint', label: 'Mountpoint', secondary: true, sort: (v) => v.mountpoint, render: (v) => <span className="mono muted small">{v.mountpoint}</span> },
+    { key: 'mountpoint', label: 'Mountpoint', secondary: true, sort: (v) => v.mountpoint, render: (v) => (
+        <span className="mono muted small clip" title={v.mountpoint}>
+          {shortHashes(v.mountpoint)}
+        </span>
+      ),
+    },
     { key: 'created', label: 'Created', secondary: true, sort: (v) => v.created, render: (v) => <span className="muted">{fmtAgo(v.created)}</span> },
   ];
 

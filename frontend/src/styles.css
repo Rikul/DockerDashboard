@@ -370,9 +370,9 @@ select {
   gap: 10px;
   min-width: 0;
 }
+/* Only scrolls sideways (narrow screens); long lists scroll with the page. */
 .table-box {
-  max-height: 70vh;
-  overflow: auto;
+  overflow-x: auto;
 }
 .table {
   width: 100%;
@@ -433,6 +433,14 @@ select {
 .table td .mono {
   white-space: nowrap;
   overflow-wrap: normal;
+}
+/* Long values that would widen the table: cut with an ellipsis, full text in the tooltip. */
+.table td .clip {
+  display: inline-block;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 .name-cell {
   display: flex;

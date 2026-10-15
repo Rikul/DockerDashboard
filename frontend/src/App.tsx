@@ -123,8 +123,10 @@ function Dashboard({ session, onSignOut }: { session: Session; onSignOut: () => 
   const networks = usePoll(api.networks, 20_000);
   const stats = usePoll(() => api.stats(60), 5_000, tab === 'overview');
 
-  const go = (t: string, filter?: string) => {
-    if (filter) setFilters((x) => ({ ...x, [t]: filter }));
+  // A filter only applies to the visit that asked for it (the Overview
+  // drill-downs); opening a tab plainly shows everything.
+  const go = (t: string, filter = 'all') => {
+    setFilters((x) => ({ ...x, [t]: filter }));
     setHash(t);
     window.scrollTo({ top: 0 });
   };

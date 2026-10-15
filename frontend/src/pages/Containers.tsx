@@ -4,7 +4,7 @@ import { useActions } from '../actions';
 import { DataTable, type Column, type Filter } from '../components/DataTable';
 import { InspectViewer, LogViewer } from '../components/LogViewer';
 import { Badge, Bar, Button, Card, ErrorLine, Skeleton } from '../components/ui';
-import { attentionReason, containerStatus, fmtBytes, fmtDuration, fmtPct, fmtPort } from '../format';
+import { attentionReason, containerStatus, fmtBytes, fmtDuration, fmtPct, fmtPort, shortHashes } from '../format';
 import type { Poll } from '../hooks';
 import type { Container } from '../types';
 
@@ -101,7 +101,12 @@ export function ContainersPage({ poll, filter, onFilter }: { poll: Poll<Containe
         </div>
       ),
     },
-    { key: 'image', label: 'Image', secondary: true, sort: (c) => c.image, render: (c) => <span className="mono muted">{c.image}</span> },
+    { key: 'image', label: 'Image', secondary: true, sort: (c) => c.image, render: (c) => (
+        <span className="mono muted clip" title={c.image}>
+          {shortHashes(c.image)}
+        </span>
+      ),
+    },
     {
       key: 'status',
       label: 'Status',

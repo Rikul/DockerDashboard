@@ -83,3 +83,8 @@ export function containerStatus(c: Container): [Tone, string] {
 export const reclaimableImages = (images: Image[]) => images.filter((i) => i.containers === 0);
 export const unusedVolumes = (vols: Volume[]) => vols.filter((v) => v.used_by.length === 0);
 export const sumSize = (xs: { size: number }[]) => xs.reduce((s, x) => s + Math.max(0, x.size), 0);
+
+/** Shortens 64-hex IDs and digests (image IDs, sha256 digests, volume paths) to 12 characters. */
+export function shortHashes(s: string): string {
+  return s.replace(/\b([0-9a-f]{12})[0-9a-f]{52}\b/g, '$1…');
+}
