@@ -43,14 +43,15 @@ const paths = {
   spinner: <path d="M12 3a9 9 0 1 0 9 9" />,
 };
 
-export type IconName = keyof typeof paths;
+/** Glyphs a caller can pick; the spinner is only a busy state of IconButton. */
+export type IconName = Exclude<keyof typeof paths, 'spinner'>;
 
-export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
+export function Icon({ name }: { name: IconName | 'spinner' }) {
   return (
     <svg
       className={name === 'spinner' ? 'icon spin' : 'icon'}
-      width={size}
-      height={size}
+      width={16}
+      height={16}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
