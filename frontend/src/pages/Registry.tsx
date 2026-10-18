@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import { api } from '../api';
 import { useActions } from '../actions';
 import { DataTable, type Column } from '../components/DataTable';
-import { Button, Card, ErrorLine, Pill, Skeleton } from '../components/ui';
+import { Button, Card, ErrorLine, IconButton, Pill, Skeleton } from '../components/ui';
 import { fmtAgo, fmtBytes } from '../format';
 import { usePoll } from '../hooks';
 import type { RegistryTag } from '../types';
@@ -88,22 +88,27 @@ REGISTRY_PASSWORD=…                 # optional, or a token`}</pre>
           initialSort={{ key: 'created', dir: 'desc' }}
           actions={(t) => (
             <>
-              <Button
+              <IconButton
+                icon="copy"
+                label="Copy reference"
                 onClick={() => {
                   void navigator.clipboard?.writeText(t.ref).then(
                     () => toast(`Copied ${t.ref}`),
                     () => toast(t.ref),
                   );
                 }}
-              >
-                Copy
-              </Button>
+              />
               {!readOnly && (
                 <>
-                  <Button disabled={isBusy(`pull:${t.ref}`)} onClick={() => run(() => api.pullImage(t.ref), { success: `Pulled ${t.ref}`, after: onPulled, key: `pull:${t.ref}` })}>
-                    {isBusy(`pull:${t.ref}`) ? 'Pulling…' : 'Pull to host'}
-                  </Button>
-                  <Button
+                  <IconButton
+                    icon="download"
+                    label={isBusy(`pull:${t.ref}`) ? 'Pulling…' : 'Pull to host'}
+                    busy={isBusy(`pull:${t.ref}`)}
+                    onClick={() => run(() => api.pullImage(t.ref), { success: `Pulled ${t.ref}`, after: onPulled, key: `pull:${t.ref}` })}
+                  />
+                  <IconButton
+                    icon="trash"
+                    label="Delete"
                     danger
                     onClick={() =>
                       run(() => api.deleteRegistryTag(t.repository, t.tag), {
@@ -122,9 +127,7 @@ REGISTRY_PASSWORD=…                 # optional, or a token`}</pre>
                         after: poll.refresh, // a delete clears the server's cache
                       })
                     }
-                  >
-                    Delete
-                  </Button>
+                  />
                 </>
               )}
             </>

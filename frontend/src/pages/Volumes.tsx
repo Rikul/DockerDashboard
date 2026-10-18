@@ -3,7 +3,7 @@ import { api } from '../api';
 import { useActions } from '../actions';
 import { DataTable, type Column, type Filter } from '../components/DataTable';
 import { InspectViewer } from '../components/LogViewer';
-import { Bar, Button, Card, ErrorLine, Pill, Skeleton } from '../components/ui';
+import { Bar, Button, Card, ErrorLine, IconButton, Pill, Skeleton } from '../components/ui';
 import { fmtAgo, fmtBytes, shortHashes, sumSize, unusedVolumes } from '../format';
 import type { Poll } from '../hooks';
 import type { Volume } from '../types';
@@ -91,9 +91,11 @@ export function VolumesPage({ poll }: { poll: Poll<Volume[]> }) {
           initialSort={{ key: 'size', dir: 'desc' }}
           actions={(v) => (
             <>
-              <Button onClick={() => setInspect(v)}>Inspect</Button>
+              <IconButton icon="inspect" label="Inspect" onClick={() => setInspect(v)} />
               {!readOnly && v.used_by.length === 0 && (
-                <Button
+                <IconButton
+                  icon="trash"
+                  label="Delete"
                   danger
                   onClick={() =>
                     run(() => api.removeVolume(v.name), {
@@ -107,9 +109,7 @@ export function VolumesPage({ poll }: { poll: Poll<Volume[]> }) {
                       after: () => poll.refresh(),
                     })
                   }
-                >
-                  Delete
-                </Button>
+                />
               )}
             </>
           )}
