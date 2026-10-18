@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { Tone } from '../format';
+import { Icon, type IconName } from './icons';
 
 export function Badge({ tone, children }: { tone: Tone; children: ReactNode }) {
   return (
@@ -82,6 +83,35 @@ export function Button({
       title={title}
     >
       {children}
+    </button>
+  );
+}
+
+/** A compact icon-only button for table rows; label is the tooltip and accessible name. busy disables it and shows a spinner. */
+export function IconButton({
+  icon,
+  label,
+  onClick,
+  danger,
+  busy,
+}: {
+  icon: IconName;
+  label: string;
+  onClick?: () => void;
+  danger?: boolean;
+  busy?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={`btn icon-only${danger ? ' danger' : ''}`}
+      onClick={onClick}
+      disabled={busy}
+      title={label}
+      aria-label={label}
+      aria-busy={busy || undefined}
+    >
+      <Icon name={busy ? 'spinner' : icon} />
     </button>
   );
 }

@@ -3,7 +3,7 @@ import { api } from '../api';
 import { useActions } from '../actions';
 import { DataTable, type Column, type Filter } from '../components/DataTable';
 import { InspectViewer, LogViewer } from '../components/LogViewer';
-import { Badge, Bar, Button, Card, ErrorLine, Skeleton } from '../components/ui';
+import { Badge, Bar, Button, Card, ErrorLine, IconButton, Skeleton } from '../components/ui';
 import { attentionReason, containerStatus, fmtBytes, fmtDuration, fmtPct, fmtPort, shortHashes } from '../format';
 import type { Poll } from '../hooks';
 import type { Container } from '../types';
@@ -50,32 +50,24 @@ export function ContainerActions({ c, refresh, onLogs, onInspect }: { c: Contain
     );
   return (
     <>
-      <Button onClick={onLogs}>Logs</Button>
-      {onInspect && <Button onClick={onInspect}>Inspect</Button>}
+      <IconButton icon="logs" label="Logs" onClick={onLogs} />
+      {onInspect && <IconButton icon="inspect" label="Inspect" onClick={onInspect} />}
       {!readOnly && (
         <>
           {(c.state === 'exited' || c.state === 'created' || c.state === 'dead') && (
-            <Button onClick={() => act('start', 'started')} disabled={busy('start')}>
-              {busy('start') ? 'Starting…' : 'Start'}
-            </Button>
+            <IconButton icon="play" label={busy('start') ? 'Starting…' : 'Start'} onClick={() => act('start', 'started')} busy={busy('start')} />
           )}
-          {c.state === 'paused' && <Button onClick={() => act('unpause', 'resumed')}>Unpause</Button>}
+          {c.state === 'paused' && <IconButton icon="play" label="Unpause" onClick={() => act('unpause', 'resumed')} />}
           {c.state === 'running' && (
             <>
-              <Button onClick={() => act('restart', 'restarted')} disabled={busy('restart')}>
-                {busy('restart') ? 'Restarting…' : 'Restart'}
-              </Button>
-              <Button onClick={() => act('pause', 'paused')}>Pause</Button>
+              <IconButton icon="restart" label={busy('restart') ? 'Restarting…' : 'Restart'} onClick={() => act('restart', 'restarted')} busy={busy('restart')} />
+              <IconButton icon="pause" label="Pause" onClick={() => act('pause', 'paused')} />
             </>
           )}
           {(c.state === 'running' || c.state === 'restarting' || c.state === 'paused') && (
-            <Button onClick={() => act('stop', 'stopped')} disabled={busy('stop')}>
-              {busy('stop') ? 'Stopping…' : 'Stop'}
-            </Button>
+            <IconButton icon="stop" label={busy('stop') ? 'Stopping…' : 'Stop'} onClick={() => act('stop', 'stopped')} busy={busy('stop')} />
           )}
-          <Button danger onClick={remove}>
-            Remove
-          </Button>
+          <IconButton icon="trash" label="Remove" danger onClick={remove} />
         </>
       )}
     </>

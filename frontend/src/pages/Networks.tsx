@@ -3,7 +3,7 @@ import { api } from '../api';
 import { useActions } from '../actions';
 import { DataTable, type Column } from '../components/DataTable';
 import { InspectViewer } from '../components/LogViewer';
-import { Button, Card, ErrorLine, Pill, Skeleton } from '../components/ui';
+import { Button, Card, ErrorLine, IconButton, Pill, Skeleton } from '../components/ui';
 import type { Poll } from '../hooks';
 import type { Container, Network } from '../types';
 
@@ -114,10 +114,12 @@ export function NetworksPage({ poll, containers, onChanged }: { poll: Poll<Netwo
           initialSort={{ key: 'containers', dir: 'desc' }}
           actions={(n) => (
             <>
-              <Button onClick={() => setInspect(n)}>Inspect</Button>
-              {joinable(n) && <Button onClick={() => void connect(n)}>Connect</Button>}
+              <IconButton icon="inspect" label="Inspect" onClick={() => setInspect(n)} />
+              {joinable(n) && <IconButton icon="link" label="Connect a container" onClick={() => void connect(n)} />}
               {!readOnly && !n.builtin && n.containers.length === 0 && (
-                <Button
+                <IconButton
+                  icon="trash"
+                  label="Remove"
                   danger
                   onClick={() =>
                     run(() => api.removeNetwork(n.id), {
@@ -126,9 +128,7 @@ export function NetworksPage({ poll, containers, onChanged }: { poll: Poll<Netwo
                       after: refresh,
                     })
                   }
-                >
-                  Remove
-                </Button>
+                />
               )}
             </>
           )}

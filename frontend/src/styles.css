@@ -314,6 +314,27 @@ select {
   border-color: var(--fg);
   color: var(--bg);
 }
+.btn.icon-only {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 30px;
+  padding: 0;
+}
+.icon {
+  display: block;
+  flex: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .icon.spin {
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+}
 .icon-btn {
   background: none;
   border: 0;
