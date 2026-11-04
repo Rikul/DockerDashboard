@@ -27,7 +27,7 @@ Single Go binary (standard library only, **no third-party Go modules** — keep 
 - `backend/internal/stats` — background sampler keeping ~1h of CPU/memory history in memory.
 - `backend/internal/registry` — Registry API v2 client (basic + bearer-token auth) for the Registry tab.
 - `backend/internal/web` — `//go:embed all:dist`. If `dist/` has only `.gitkeep`, `web.FS()` returns nil and only the API is served.
-- `frontend/` — React 19 + TypeScript + Vite, d3 for charts. `src/api.ts` is the single fetch wrapper (adds the required `X-Requested-With` header; dispatches an unauthorized event on 401); `src/types.ts` mirrors the backend JSON; `pages/` has one file per tab.
+- `frontend/` — React 19 + TypeScript + Vite, d3 for charts. `src/api.ts` is the single fetch wrapper (adds the required `X-Requested-With` header; dispatches an unauthorized event on 401); `src/types.ts` mirrors the backend JSON; `pages/` has one file per tab. Row actions go through `DataTable`'s `actions`, which returns `MenuEntry[]` (falsy entries are dropped, so `cond && {…}` works) rendered as a three-dots `ActionMenu`. The container menu and the viewers it opens (logs, inspect, top, diff) come from `useContainerMenu` in `pages/Containers.tsx`, shared with the Overview's attention list.
 
 ### Build coupling
 
@@ -38,5 +38,6 @@ Vite's `outDir` is `backend/internal/web/dist` (emptied on build, `.gitkeep` res
 - Every state-changing request must carry `X-Requested-With`; the frontend wrapper does this, so use it rather than raw `fetch`.
 - Sign-in is always required (`DASHBOARD_TOKEN`, ≥16 chars); there is no auth-disabled mode.
 - `READ_ONLY` defaults to `true` (the server refuses all writes unless it is set to `false`); new mutating endpoints must respect it.
-- Container env vars must never be sent to the browser (stripped in the API layer).
+- Container env vars must never be sent to the browser (stripped in the API layer), and credential-looking volume driver options are redacted.
+- Daemon 4xx errors pass through with their status and message (`dockerError`); anything else becomes a 502. Routes use Go 1.22 patterns, so a literal segment such as `POST /api/containers/{id}/rename` takes precedence over `POST /api/containers/{id}/{action}`.
 - CI (`.github/workflows/ci.yml`) runs gofmt, `go vet`, `go test -race`, `npm ci` and `npm run build`.
