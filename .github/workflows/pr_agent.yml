@@ -26,7 +26,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Secrets can't be read in `if:`, so check them in a shell step and skip the run when missing.
+      - name: Check configuration
+        id: config
+        env:
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+        shell: bash
+        run: |
+          missing=()
+          [[ -n "$OPENROUTER_KEY" ]] || missing+=("secret OPENROUTER_KEY")
+          [[ -n "$LLM_MODEL" ]] || missing+=("variable LLM_MODEL")
+          if (( ${#missing[@]} )); then
+            echo "::warning::Skipping PR Agent: missing ${missing[*]} (Settings > Secrets and variables > Actions)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: PR Agent
+        if: steps.config.outputs.ready == 'true'
         uses: Rikul/pr-agent@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -36,9 +55,14 @@ jobs:
           CONFIG__MODEL_WEAK: openrouter/${{ vars.LLM_MODEL }}
           CONFIG__MODEL_REASONING: openrouter/${{ vars.LLM_MODEL }}
           CONFIG__FALLBACK_MODELS: '[]'
-          # Input token budget for models PR-Agent doesn't know. PR-Agent also caps input at
-          # CONFIG__MAX_MODEL_TOKENS (default 32000), so raise both to send bigger diffs.
-          CONFIG__CUSTOM_MODEL_MAX_TOKENS: ${{ vars.LLM_MAX_TOKENS || '32000' }}
+          # Input token budget. PR-Agent caps input at the lower of these two (its default cap is 32000),
+          # so both follow LLM_MAX_TOKENS. Keep it at or below the model's context window.
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: ${{ vars.LLM_MAX_TOKENS || '128000' }}
+          CONFIG__MAX_MODEL_TOKENS: ${{ vars.LLM_MAX_TOKENS || '128000' }}
+          # Reasoning models can spend the whole output budget thinking and return nothing
+          # (finish_reason: length). Keep reasoning light and leave room for the answer.
+          OPENROUTER__REASONING_EFFORT: ${{ vars.LLM_REASONING_EFFORT || 'low' }}  # none|minimal|low|medium|high
+          OPENROUTER__MAX_TOKENS: ${{ vars.LLM_MAX_OUTPUT_TOKENS || '16000' }}
           # What runs automatically when a PR opens
           GITHUB_ACTION_CONFIG__AUTO_DESCRIBE: 'false'
           GITHUB_ACTION_CONFIG__AUTO_REVIEW: 'true'
