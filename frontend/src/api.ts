@@ -66,6 +66,8 @@ export const api = {
     request<{ status: string }>('DELETE', `/api/containers/${enc(id)}?force=${force}&volumes=${volumes}`),
   containerTop: (id: string) => request<ContainerTop>('GET', `/api/containers/${enc(id)}/top`),
   containerDiff: (id: string) => request<FsChange[]>('GET', `/api/containers/${enc(id)}/diff`),
+  renameContainer: (id: string, name: string) =>
+    request<{ status: string; name: string }>('POST', `/api/containers/${enc(id)}/rename`, { name }),
   pruneContainers: () => request<PruneReport>('POST', '/api/containers/prune'),
   logsUrl: (id: string, tail: number, follow: boolean, timestamps: boolean) =>
     `/api/containers/${enc(id)}/logs?tail=${tail}&follow=${follow ? 1 : 0}&timestamps=${timestamps ? 1 : 0}`,

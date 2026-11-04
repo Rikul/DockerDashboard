@@ -186,3 +186,50 @@ func TestContainerDiff(t *testing.T) {
 		t.Fatalf("want [], got %d %q", w.Code, w.Body)
 	}
 }
+
+func TestContainerRename(t *testing.T) {
+	var gotMethod, gotPath, gotName string
+	status := http.StatusNoContent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotName = r.Method, r.URL.Path, r.URL.Query().Get("name")
+		w.WriteHeader(status)
+		if status >= 400 {
+			json.NewEncoder(w).Encode(map[string]string{"message": "Conflict. The container name is already in use"})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	dc, err := docker.New("tcp://" + strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{docker: dc}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/containers/{id}/rename", s.handleContainerRename)
+	rename := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/containers/c1/rename", strings.NewReader(body)))
+		return w
+	}
+
+	w := rename(`{"name": " web-2 "}`)
+	if w.Code != 200 || gotMethod != "POST" || gotPath != "/containers/c1/rename" || gotName != "web-2" {
+		t.Fatalf("status %d; daemon saw %s %s name=%q", w.Code, gotMethod, gotPath, gotName)
+	}
+
+	// Names the daemon would refuse never reach it.
+	gotPath = ""
+	for _, bad := range []string{`{"name": ""}`, `{"name": "a"}`, `{"name": "-web"}`, `{"name": "a b"}`, `{"name": "a/b"}`, `{"nom": "x"}`, `nope`} {
+		if w := rename(bad); w.Code != 400 {
+			t.Errorf("%s: want 400, got %d", bad, w.Code)
+		}
+	}
+	if gotPath != "" {
+		t.Fatalf("an invalid name reached the daemon: %s", gotPath)
+	}
+
+	// A name already in use is the daemon's 409 with its message.
+	status = http.StatusConflict
+	if w := rename(`{"name": "taken"}`); w.Code != 409 || !strings.Contains(w.Body.String(), "already in use") {
+		t.Fatalf("want the daemon's 409, got %d %s", w.Code, w.Body)
+	}
+}

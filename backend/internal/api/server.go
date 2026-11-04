@@ -102,6 +102,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/containers/{id}/logs", s.handleContainerLogs)
 	mux.HandleFunc("GET /api/containers/{id}/top", s.handleContainerTop)
 	mux.HandleFunc("GET /api/containers/{id}/diff", s.handleContainerDiff)
+	mux.HandleFunc("POST /api/containers/{id}/rename", s.handleContainerRename)
 	mux.HandleFunc("POST /api/containers/{id}/{action}", s.handleContainerAction)
 	mux.HandleFunc("DELETE /api/containers/{id}", s.handleContainerRemove)
 	mux.HandleFunc("POST /api/containers/prune", s.handleContainersPrune)

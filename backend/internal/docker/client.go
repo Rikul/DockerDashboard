@@ -214,6 +214,11 @@ func (c *Client) ContainerChanges(ctx context.Context, id string) ([]FsChange, e
 	return out, err
 }
 
+// RenameContainer gives a container a new name.
+func (c *Client) RenameContainer(ctx context.Context, id, name string) error {
+	return c.call(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/rename", url.Values{"name": {name}}, nil, nil)
+}
+
 func (c *Client) RemoveContainer(ctx context.Context, id string, force, volumes bool) error {
 	q := url.Values{"force": {boolStr(force)}, "v": {boolStr(volumes)}}
 	return c.call(ctx, http.MethodDelete, "/containers/"+url.PathEscape(id), q, nil, nil)

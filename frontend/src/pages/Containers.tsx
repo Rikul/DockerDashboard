@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '../api';
 import { useActions } from '../actions';
 import type { MenuEntry } from '../components/ActionMenu';
 import { DataTable, type Column, type Filter } from '../components/DataTable';
 import { DiffViewer, TopViewer } from '../components/ContainerViews';
 import { InspectViewer, LogViewer } from '../components/LogViewer';
+import { Icon } from '../components/icons';
 import { Badge, Bar, Button, Card, ErrorLine, Skeleton } from '../components/ui';
 import { attentionReason, containerStatus, fmtBytes, fmtDuration, fmtPct, fmtPort, shortHashes } from '../format';
 import type { Poll } from '../hooks';
@@ -98,6 +99,108 @@ export function useContainerMenu(refresh: () => Promise<void>): { menu: (c: Cont
   return { menu, viewers };
 }
 
+/** The daemon's rule for container names (at least two characters). */
+const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/;
+
+/**
+ * A container's name. Unless the dashboard is read-only, clicking it turns it
+ * into an input; Enter or the check mark asks for confirmation, then renames.
+ */
+function RenameableName({ c, refresh }: { c: Container; refresh: () => Promise<void> }) {
+  const { run, readOnly, isBusy } = useActions();
+  const [draft, setDraft] = useState<string | null>(null); // null: not editing
+  const input = useRef<HTMLInputElement>(null);
+  const wrap = useRef<HTMLSpanElement>(null);
+  // The confirmation dialog takes focus, which must not count as leaving the field.
+  const confirming = useRef(false);
+  // After a failed or cancelled rename the field is usable again once the
+  // busy state clears (a disabled input can't take focus before that).
+  const [retry, setRetry] = useState(0);
+  const busy = isBusy(`${c.id}:rename`);
+  useEffect(() => {
+    if (retry > 0 && !busy) input.current?.focus();
+  }, [retry, busy]);
+
+  if (readOnly) return <span className="key">{c.name}</span>;
+
+  if (draft === null) {
+    return (
+      <button type="button" className="rename-name key" title="Click to rename" onClick={() => setDraft(c.name)}>
+        {c.name}
+        <Icon name="edit" />
+      </button>
+    );
+  }
+
+  const name = draft.trim();
+  const invalid = name !== '' && !NAME_RE.test(name);
+  const canSubmit = name !== c.name && NAME_RE.test(name) && !busy;
+
+  const submit = async () => {
+    if (!canSubmit || confirming.current) return;
+    confirming.current = true;
+    const done = await run(() => api.renameContainer(c.id, name), {
+      confirm: {
+        title: `Rename ${c.name}?`,
+        body: (
+          <p>
+            <b>{c.name}</b> becomes <b>{name}</b>. Anything that reaches it by the old name, such as other containers on a shared network, links or
+            scripts, has to use the new one.
+            {c.project && ' Compose may give it back its old name the next time the stack is recreated.'}
+          </p>
+        ),
+        confirmLabel: 'Rename',
+      },
+      success: `${c.name} renamed to ${name}`,
+      after: refresh,
+      key: `${c.id}:rename`,
+    });
+    confirming.current = false;
+    if (done) setDraft(null);
+    else setRetry((n) => n + 1);
+  };
+
+  return (
+    <span
+      ref={wrap}
+      className="rename-edit"
+      onBlur={(e) => {
+        if (!confirming.current && !wrap.current?.contains(e.relatedTarget as Node | null)) setDraft(null);
+      }}
+    >
+      <input
+        ref={input}
+        className={`rename-input${invalid ? ' invalid' : ''}`}
+        value={draft}
+        autoFocus
+        spellCheck={false}
+        disabled={busy}
+        aria-label={`New name for ${c.name}`}
+        aria-invalid={invalid || undefined}
+        style={{ width: `${Math.max(12, draft.length + 2)}ch` }}
+        onFocus={(e) => e.currentTarget.select()}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            void submit();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setDraft(null);
+          }
+        }}
+      />
+      <button type="button" className="btn icon-only" aria-label="Confirm rename" title="Rename…" disabled={!canSubmit} onClick={() => void submit()}>
+        <Icon name={busy ? 'spinner' : 'check'} />
+      </button>
+      <button type="button" className="btn icon-only" aria-label="Cancel rename" title="Cancel" disabled={busy} onClick={() => setDraft(null)}>
+        <Icon name="x" />
+      </button>
+      {invalid && <span className="small bad-text">Letters, digits, _ . - ; at least 2 characters</span>}
+    </span>
+  );
+}
+
 export function ContainersPage({ poll, filter, onFilter }: { poll: Poll<Container[]>; filter: string; onFilter: (f: string) => void }) {
   const { run, readOnly } = useActions();
   const rows = poll.data ?? [];
@@ -111,7 +214,7 @@ export function ContainersPage({ poll, filter, onFilter }: { poll: Poll<Containe
       sort: (c) => c.name,
       render: (c) => (
         <div className="name-cell">
-          <span className="key">{c.name}</span>
+          <RenameableName c={c} refresh={poll.refresh} />
           {c.project && <span className="muted small">{c.project}</span>}
         </div>
       ),

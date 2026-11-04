@@ -329,6 +329,29 @@ func (s *Server) handleContainerDiff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// containerNameRe is the daemon's rule for container names.
+var containerNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`)
+
+func (s *Server) handleContainerRename(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, `body must be {"name": "new-name"}`)
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if !containerNameRe.MatchString(name) {
+		writeError(w, http.StatusBadRequest, "a name needs at least 2 characters: letters, digits, underscore, dot or hyphen, starting with a letter or digit")
+		return
+	}
+	if err := s.docker.RenameContainer(r.Context(), r.PathValue("id"), name); err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "renamed", "name": name})
+}
+
 func (s *Server) handleContainerAction(w http.ResponseWriter, r *http.Request) {
 	id, action := r.PathValue("id"), r.PathValue("action")
 	switch action {
