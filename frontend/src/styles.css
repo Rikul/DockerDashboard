@@ -897,3 +897,41 @@ select {
   padding: 8px;
   font-size: var(--fs-body);
 }
+
+/* ---- container viewers: top and diff */
+.logs .ps {
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+.logs .ps th {
+  position: sticky;
+  top: 0;
+  padding: 2px 14px 4px 0;
+  background: #0f0f0e;
+  color: #8d8d87;
+  font-weight: 600;
+  text-align: left;
+}
+.logs .ps td {
+  padding: 1px 14px 1px 0;
+  vertical-align: top;
+}
+.logs .ps td:last-child {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.logs .diff-kind {
+  display: inline-block;
+  width: 1.2em;
+  font-weight: 700;
+}
+.logs .diff-added .diff-kind {
+  color: #6fd48a;
+}
+.logs .diff-modified .diff-kind {
+  color: #e6b84c;
+}
+.logs .diff-deleted,
+.logs .diff-deleted .diff-kind {
+  color: #ff8a80;
+}

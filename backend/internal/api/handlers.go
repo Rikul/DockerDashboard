@@ -284,6 +284,51 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, data)
 }
 
+// handleContainerTop lists a running container's processes (docker top). The
+// daemon answers 409 when the container is not running.
+func (s *Server) handleContainerTop(w http.ResponseWriter, r *http.Request) {
+	top, err := s.docker.ContainerTop(r.Context(), r.PathValue("id"))
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	if top.Titles == nil {
+		top.Titles = []string{}
+	}
+	if top.Processes == nil {
+		top.Processes = [][]string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"titles": top.Titles, "processes": top.Processes})
+}
+
+// ChangeView is one path in a container's filesystem diff.
+type ChangeView struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"` // added, modified or deleted
+}
+
+// handleContainerDiff lists filesystem changes against the image (docker diff).
+func (s *Server) handleContainerDiff(w http.ResponseWriter, r *http.Request) {
+	changes, err := s.docker.ContainerChanges(r.Context(), r.PathValue("id"))
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	out := make([]ChangeView, 0, len(changes))
+	for _, c := range changes {
+		kind := "modified"
+		switch c.Kind {
+		case 1:
+			kind = "added"
+		case 2:
+			kind = "deleted"
+		}
+		out = append(out, ChangeView{Path: c.Path, Kind: kind})
+	}
+	sort.SliceStable(out, func(a, b int) bool { return out[a].Path < out[b].Path })
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleContainerAction(w http.ResponseWriter, r *http.Request) {
 	id, action := r.PathValue("id"), r.PathValue("action")
 	switch action {

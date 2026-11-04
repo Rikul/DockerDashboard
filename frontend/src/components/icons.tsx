@@ -40,6 +40,8 @@ const paths = {
       <path d="M5 15V6a2 2 0 0 1 2-2h8" />
     </>
   ),
+  processes: <path d="M5 20V11M12 20V4M19 20v-6" />,
+  diff: <path d="M12 4v9M7.5 8.5h9M7.5 19h9" />,
   more: (
     <>
       <circle cx="12" cy="5" r="1.3" />

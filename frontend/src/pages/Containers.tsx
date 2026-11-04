@@ -3,6 +3,7 @@ import { api } from '../api';
 import { useActions } from '../actions';
 import type { MenuEntry } from '../components/ActionMenu';
 import { DataTable, type Column, type Filter } from '../components/DataTable';
+import { DiffViewer, TopViewer } from '../components/ContainerViews';
 import { InspectViewer, LogViewer } from '../components/LogViewer';
 import { Badge, Bar, Button, Card, ErrorLine, Skeleton } from '../components/ui';
 import { attentionReason, containerStatus, fmtBytes, fmtDuration, fmtPct, fmtPort, shortHashes } from '../format';
@@ -18,7 +19,7 @@ export const containerFilters: Filter<Container>[] = [
   { id: 'attention', label: 'Needs attention', test: (c) => attentionReason(c) != null },
 ];
 
-type Viewer = { kind: 'logs' | 'inspect'; c: Container };
+type Viewer = { kind: 'logs' | 'inspect' | 'top' | 'diff'; c: Container };
 
 /**
  * The row menu for containers, plus the viewers its items open. Shared with
@@ -33,6 +34,8 @@ export function useContainerMenu(refresh: () => Promise<void>): { menu: (c: Cont
     <>
       {viewer.kind === 'logs' && <LogViewer id={viewer.c.id} name={viewer.c.name} onClose={close} />}
       {viewer.kind === 'inspect' && <InspectViewer title={`Inspect · ${viewer.c.name}`} load={() => api.inspectContainer(viewer.c.id)} onClose={close} />}
+      {viewer.kind === 'top' && <TopViewer id={viewer.c.id} name={viewer.c.name} onClose={close} />}
+      {viewer.kind === 'diff' && <DiffViewer id={viewer.c.id} name={viewer.c.name} onClose={close} />}
     </>
   );
   const menu = (c: Container): MenuEntry[] => {
@@ -67,6 +70,8 @@ export function useContainerMenu(refresh: () => Promise<void>): { menu: (c: Cont
     return [
       { label: 'Logs', icon: 'logs', onClick: () => setViewer({ kind: 'logs', c }) },
       { label: 'Inspect', icon: 'inspect', onClick: () => setViewer({ kind: 'inspect', c }) },
+      c.state === 'running' && { label: 'Processes (top)', icon: 'processes', onClick: () => setViewer({ kind: 'top', c }) },
+      { label: 'File changes (diff)', icon: 'diff', onClick: () => setViewer({ kind: 'diff', c }) },
       !readOnly && (c.state === 'exited' || c.state === 'created' || c.state === 'dead') && {
         label: busy('start') ? 'Starting…' : 'Start',
         icon: 'play',

@@ -133,3 +133,56 @@ func TestNetworkInspect(t *testing.T) {
 		t.Fatalf("want the daemon's 404, got %d %s", w.Code, w.Body)
 	}
 }
+
+func TestContainerTop(t *testing.T) {
+	top := map[string]any{"Titles": []string{"PID", "CMD"}, "Processes": [][]string{{"1", "nginx"}, {"7", "sh"}}}
+	s := &Server{docker: fakeDocker(t, map[string]any{"/containers/c1/top": top, "/containers/c2/top": 409})}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/containers/{id}/top", s.handleContainerTop)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c1/top", nil))
+	var got struct {
+		Titles    []string   `json:"titles"`
+		Processes [][]string `json:"processes"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil || w.Code != 200 {
+		t.Fatalf("status %d, err %v", w.Code, err)
+	}
+	if strings.Join(got.Titles, ",") != "PID,CMD" || len(got.Processes) != 2 || got.Processes[1][1] != "sh" {
+		t.Fatalf("bad top: %+v", got)
+	}
+	// A container that isn't running is the daemon's 409, not a 502.
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c2/top", nil))
+	if w.Code != 409 {
+		t.Fatalf("want the daemon's 409, got %d %s", w.Code, w.Body)
+	}
+}
+
+func TestContainerDiff(t *testing.T) {
+	changes := []map[string]any{{"Path": "/var/log", "Kind": 0}, {"Path": "/tmp/new", "Kind": 1}, {"Path": "/etc/gone", "Kind": 2}}
+	s := &Server{docker: fakeDocker(t, map[string]any{"/containers/c1/changes": changes, "/containers/c2/changes": nil})}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/containers/{id}/diff", s.handleContainerDiff)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c1/diff", nil))
+	var got []ChangeView
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil || w.Code != 200 {
+		t.Fatalf("status %d, err %v", w.Code, err)
+	}
+	want := []ChangeView{{"/etc/gone", "deleted"}, {"/tmp/new", "added"}, {"/var/log", "modified"}}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d: got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	// No changes is an empty list, never null.
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c2/diff", nil))
+	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("want [], got %d %q", w.Code, w.Body)
+	}
+}
