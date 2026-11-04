@@ -3,7 +3,7 @@ import { api, ApiError } from '../api';
 import { useActions } from '../actions';
 import { DataTable, type Column, type Filter } from '../components/DataTable';
 import { InspectViewer } from '../components/LogViewer';
-import { Bar, Button, Card, ErrorLine, IconButton, Pill, Skeleton } from '../components/ui';
+import { Bar, Button, Card, ErrorLine, Pill, Skeleton } from '../components/ui';
 import { fmtAgo, fmtBytes, reclaimableImages, shortHashes, sumSize } from '../format';
 import type { Poll } from '../hooks';
 import type { Image } from '../types';
@@ -136,17 +136,12 @@ export function ImagesPage({ poll, onChanged, filter, onFilter }: { poll: Poll<I
           filter={filter}
           onFilter={onFilter}
           initialSort={{ key: 'size', dir: 'desc' }}
-          actions={(i) => (
-            <>
-              <IconButton icon="inspect" label="Inspect" onClick={() => setInspect(i)} />
-              {!readOnly && !i.dangling && (
-                <IconButton icon="download" label="Update (pull the newest version of this tag)" onClick={() => void pull(i.ref)} />
-              )}
-              {!readOnly && i.containers === 0 && (
-                <IconButton icon="trash" label="Remove" danger onClick={() => remove(i)} />
-              )}
-            </>
-          )}
+          actions={(i) => [
+            { label: 'Inspect', icon: 'inspect', onClick: () => setInspect(i) },
+            !readOnly && !i.dangling && { label: 'Update (pull newest)', icon: 'download', onClick: () => void pull(i.ref) },
+            !readOnly && i.containers === 0 && { label: 'Remove', icon: 'trash', danger: true, onClick: () => remove(i) },
+          ]}
+          actionsLabel={(i) => `Actions for ${i.ref}`}
           toolbar={
             !readOnly && (
               <>

@@ -3,7 +3,7 @@ import { api } from '../api';
 import { useActions } from '../actions';
 import { DataTable, type Column } from '../components/DataTable';
 import { InspectViewer } from '../components/LogViewer';
-import { Button, Card, ErrorLine, IconButton, Pill, Skeleton } from '../components/ui';
+import { Button, Card, ErrorLine, Pill, Skeleton } from '../components/ui';
 import type { Poll } from '../hooks';
 import type { Container, Network } from '../types';
 
@@ -112,26 +112,24 @@ export function NetworksPage({ poll, containers, onChanged }: { poll: Poll<Netwo
           searchText={(n) => [n.name, n.driver, n.subnet, n.containers.join(' '), n.project].join(' ')}
           searchPlaceholder="Search networks or containers…"
           initialSort={{ key: 'containers', dir: 'desc' }}
-          actions={(n) => (
-            <>
-              <IconButton icon="inspect" label="Inspect" onClick={() => setInspect(n)} />
-              {joinable(n) && <IconButton icon="link" label="Connect a container" onClick={() => void connect(n)} />}
-              {!readOnly && !n.builtin && n.containers.length === 0 && (
-                <IconButton
-                  icon="trash"
-                  label="Remove"
-                  danger
-                  onClick={() =>
-                    run(() => api.removeNetwork(n.id), {
-                      confirm: { title: `Remove network ${n.name}?`, body: <p>No containers are attached to it.</p>, confirmLabel: 'Remove', danger: true },
-                      success: `Network ${n.name} removed`,
-                      after: refresh,
-                    })
-                  }
-                />
-              )}
-            </>
-          )}
+          actions={(n) => [
+            { label: 'Inspect', icon: 'inspect', onClick: () => setInspect(n) },
+            joinable(n) && { label: 'Connect a container', icon: 'link', onClick: () => void connect(n) },
+            !readOnly &&
+              !n.builtin &&
+              n.containers.length === 0 && {
+                label: 'Remove',
+                icon: 'trash',
+                danger: true,
+                onClick: () =>
+                  run(() => api.removeNetwork(n.id), {
+                    confirm: { title: `Remove network ${n.name}?`, body: <p>No containers are attached to it.</p>, confirmLabel: 'Remove', danger: true },
+                    success: `Network ${n.name} removed`,
+                    after: refresh,
+                  }),
+              },
+          ]}
+          actionsLabel={(n) => `Actions for ${n.name}`}
           toolbar={
             !readOnly && (
               <>

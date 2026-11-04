@@ -438,13 +438,124 @@ select {
 .table td.empty {
   padding: 20px 10px;
 }
-.row-actions {
-  display: flex;
-  gap: 4px;
-  flex-wrap: nowrap;
-}
 .actions-col {
   width: 1%;
+}
+.actions-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- row action menu (three dots) */
+.menu-trigger {
+  border-color: transparent;
+  background: none;
+  color: var(--fg-muted);
+}
+.menu-trigger:hover:not(:disabled),
+.menu-trigger[aria-expanded='true'] {
+  background: var(--hover);
+  border-color: var(--line);
+  color: var(--fg);
+}
+.menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 190px;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--popover);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  outline: none;
+  animation: menu-in 140ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+.menu[data-state='closing'] {
+  pointer-events: none;
+  animation: menu-out 120ms ease-in both;
+}
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.94);
+  }
+}
+@keyframes menu-out {
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.94);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu {
+    animation-name: menu-fade-in;
+  }
+  .menu[data-state='closing'] {
+    animation-name: menu-fade-out;
+  }
+  @keyframes menu-fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes menu-fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-body);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.menu-item .icon,
+.menu-gap {
+  width: 16px;
+  color: var(--fg-muted);
+}
+.menu-item:hover:not(:disabled),
+.menu-item:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+.menu-item:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.menu-item.danger,
+.menu-item.danger .icon {
+  color: var(--bad);
+}
+.menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
 }
 @media (max-width: 760px) {
   .secondary {
