@@ -20,6 +20,10 @@ export const menuItems = (entries: MenuEntry[]): MenuItem[] => entries.filter((e
 /** Keep in step with the animation durations in styles.css. */
 const CLOSE_MS = 120;
 const EDGE = 8;
+/** Space between the button and the menu. */
+const GAP = 4;
+/** The smallest menu height worth showing before overlapping the button instead. */
+const MIN_ROOM = 120;
 
 type Phase = 'closed' | 'open' | 'closing';
 
@@ -32,7 +36,7 @@ type Phase = 'closed' | 'open' | 'closing';
 export function ActionMenu({ items, label = 'Actions' }: { items: MenuEntry[]; label?: string }) {
   const list = menuItems(items);
   const [phase, setPhase] = useState<Phase>('closed');
-  const [pos, setPos] = useState<{ top: number; left: number; origin: string } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight?: number; origin: string } | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const timer = useRef<number>(undefined);
@@ -55,20 +59,28 @@ export function ActionMenu({ items, label = 'Actions' }: { items: MenuEntry[]; l
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
   // Place the menu under the button, right-aligned with it; flip above when
-  // there is more room there. Runs before paint so it never flashes elsewhere.
+  // there is more room there. A menu taller than the room on that side gets
+  // an internal scrollbar, and it always stays inside the viewport. Runs
+  // before paint so it never flashes elsewhere.
   useLayoutEffect(() => {
     if (phase !== 'open' || pos) return;
     const t = trigger.current?.getBoundingClientRect();
     const m = menu.current;
     if (!t || !m) return;
+    const vh = window.innerHeight;
     const w = m.offsetWidth;
     const h = m.offsetHeight;
-    const below = window.innerHeight - t.bottom - EDGE;
-    const above = t.top - EDGE;
+    const below = vh - t.bottom - GAP - EDGE;
+    const above = t.top - GAP - EDGE;
     const up = h > below && above > below;
+    // With next to no room on either side, overlap the button rather than
+    // squeeze the menu to a sliver.
+    const room = Math.max(up ? above : below, Math.min(h, MIN_ROOM));
+    const height = Math.min(h, room, vh - 2 * EDGE);
+    const want = up ? t.top - GAP - height : t.bottom + GAP;
+    const top = Math.max(EDGE, Math.min(want, vh - EDGE - height));
     const left = Math.max(EDGE, Math.min(t.right - w, window.innerWidth - w - EDGE));
-    const top = up ? Math.max(EDGE, t.top - h - 4) : t.bottom + 4;
-    setPos({ top, left, origin: `${Math.round(t.right - left)}px ${up ? 'bottom' : 'top'}` });
+    setPos({ top, left, maxHeight: height < h ? height : undefined, origin: `${Math.round(t.right - left)}px ${up ? 'bottom' : 'top'}` });
   }, [phase, pos]);
 
   // Once placed, move focus into the menu.
@@ -129,7 +141,8 @@ export function ActionMenu({ items, label = 'Actions' }: { items: MenuEntry[]; l
         e.stopPropagation();
         return close(true);
       case 'Tab':
-        e.preventDefault();
+        // Put focus back on the button and let the browser's own Tab move on
+        // from there, so one press reaches the next (or previous) control.
         return close(true);
     }
   };
@@ -168,7 +181,7 @@ export function ActionMenu({ items, label = 'Actions' }: { items: MenuEntry[]; l
             aria-label={label}
             tabIndex={-1}
             data-state={phase}
-            style={pos ? { top: pos.top, left: pos.left, transformOrigin: pos.origin } : { top: 0, left: 0, visibility: 'hidden' }}
+            style={pos ? { top: pos.top, left: pos.left, maxHeight: pos.maxHeight, transformOrigin: pos.origin } : { top: 0, left: 0, visibility: 'hidden' }}
             onKeyDown={onMenuKey}
           >
             {list.map((item, i) => (

@@ -80,6 +80,9 @@ func TestReadOnly(t *testing.T) {
 	if w := do(h, "DELETE", "/api/volumes/x", "", bearer); w.Code != 403 || !strings.Contains(w.Body.String(), "read-only") {
 		t.Fatalf("write in read-only mode: %d %s", w.Code, w.Body)
 	}
+	if w := do(h, "POST", "/api/containers/c1/rename", `{"name":"web-2"}`, bearer); w.Code != 403 || !strings.Contains(w.Body.String(), "read-only") {
+		t.Fatalf("rename in read-only mode: %d %s", w.Code, w.Body)
+	}
 }
 
 func TestHealthFromStatus(t *testing.T) {
