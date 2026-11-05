@@ -284,6 +284,116 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, data)
 }
 
+// handleContainerTop lists a running container's processes (docker top). The
+// daemon answers 409 when the container is not running.
+func (s *Server) handleContainerTop(w http.ResponseWriter, r *http.Request) {
+	top, err := s.docker.ContainerTop(r.Context(), r.PathValue("id"))
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	if top.Titles == nil {
+		top.Titles = []string{}
+	}
+	if top.Processes == nil {
+		top.Processes = [][]string{}
+	}
+	redactTop(top.Titles, top.Processes)
+	writeJSON(w, http.StatusOK, map[string]any{"titles": top.Titles, "processes": top.Processes})
+}
+
+// commandTitles are the ps columns that hold a process's command line.
+var commandTitles = map[string]bool{"CMD": true, "COMMAND": true, "ARGS": true}
+
+// urlPassword matches the password in a URL's user info (scheme://user:pass@host).
+var urlPassword = regexp.MustCompile(`(://[^/\s:@]*:)[^/\s@]+@`)
+
+// redactTop hides credential-looking arguments in the command column of a
+// docker top result, in place. Processes often take passwords or tokens on
+// their command line (--password=x, --token x, API_KEY=x, user:pass@host).
+func redactTop(titles []string, procs [][]string) {
+	for col, t := range titles {
+		if !commandTitles[strings.ToUpper(t)] {
+			continue
+		}
+		for _, row := range procs {
+			if col < len(row) {
+				row[col] = redactCommand(row[col])
+			}
+		}
+	}
+}
+
+func redactCommand(cmd string) string {
+	args := strings.Fields(cmd)
+	for i := 0; i < len(args); i++ {
+		args[i] = urlPassword.ReplaceAllString(args[i], "${1}REDACTED@")
+		if name, _, ok := strings.Cut(args[i], "="); ok {
+			if secretKey.MatchString(name) {
+				args[i] = name + "=REDACTED"
+			}
+			continue
+		}
+		// "--password value": the value is the next argument.
+		if strings.HasPrefix(args[i], "-") && secretKey.MatchString(args[i]) && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			args[i+1] = "REDACTED"
+			i++
+		}
+	}
+	return strings.Join(args, " ")
+}
+
+// ChangeView is one path in a container's filesystem diff.
+type ChangeView struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"` // added, modified or deleted
+}
+
+// handleContainerDiff lists filesystem changes against the image (docker diff).
+func (s *Server) handleContainerDiff(w http.ResponseWriter, r *http.Request) {
+	changes, err := s.docker.ContainerChanges(r.Context(), r.PathValue("id"))
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	out := make([]ChangeView, 0, len(changes))
+	for _, c := range changes {
+		kind := "modified"
+		switch c.Kind {
+		case 1:
+			kind = "added"
+		case 2:
+			kind = "deleted"
+		}
+		out = append(out, ChangeView{Path: c.Path, Kind: kind})
+	}
+	sort.SliceStable(out, func(a, b int) bool { return out[a].Path < out[b].Path })
+	writeJSON(w, http.StatusOK, out)
+}
+
+// containerNameRe is the daemon's rule for container names.
+var containerNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`)
+
+func (s *Server) handleContainerRename(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, `body must be {"name": "new-name"}`)
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if !containerNameRe.MatchString(name) {
+		writeError(w, http.StatusBadRequest, "a name needs at least 2 characters: letters, digits, underscore, dot or hyphen, starting with a letter or digit")
+		return
+	}
+	if err := s.docker.RenameContainer(r.Context(), r.PathValue("id"), name); err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "renamed", "name": name})
+}
+
 func (s *Server) handleContainerAction(w http.ResponseWriter, r *http.Request) {
 	id, action := r.PathValue("id"), r.PathValue("action")
 	switch action {

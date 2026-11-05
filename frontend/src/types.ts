@@ -146,6 +146,18 @@ export interface PruneReport {
   SpaceReclaimed: number;
 }
 
+export interface ContainerTop {
+  titles: string[];
+  processes: string[][];
+}
+
+export type FsChangeKind = 'added' | 'modified' | 'deleted';
+
+export interface FsChange {
+  path: string;
+  kind: FsChangeKind;
+}
+
 export interface LogLine {
   stream: 'stdout' | 'stderr';
   text: string;

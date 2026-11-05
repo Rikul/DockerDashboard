@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import { api } from '../api';
 import { useActions } from '../actions';
 import { DataTable, type Column } from '../components/DataTable';
-import { Button, Card, ErrorLine, IconButton, Pill, Skeleton } from '../components/ui';
+import { Button, Card, ErrorLine, Pill, Skeleton } from '../components/ui';
 import { fmtAgo, fmtBytes } from '../format';
 import { usePoll } from '../hooks';
 import type { RegistryTag } from '../types';
@@ -86,52 +86,46 @@ REGISTRY_PASSWORD=…                 # optional, or a token`}</pre>
           searchText={(t) => `${t.repository}:${t.tag} ${t.digest}`}
           searchPlaceholder="Search repository or tag…"
           initialSort={{ key: 'created', dir: 'desc' }}
-          actions={(t) => (
-            <>
-              <IconButton
-                icon="copy"
-                label="Copy reference"
-                onClick={() => {
-                  void navigator.clipboard?.writeText(t.ref).then(
-                    () => toast(`Copied ${t.ref}`),
-                    () => toast(t.ref),
-                  );
-                }}
-              />
-              {!readOnly && (
-                <>
-                  <IconButton
-                    icon="download"
-                    label={isBusy(`pull:${t.ref}`) ? 'Pulling…' : 'Pull to host'}
-                    busy={isBusy(`pull:${t.ref}`)}
-                    onClick={() => run(() => api.pullImage(t.ref), { success: `Pulled ${t.ref}`, after: onPulled, key: `pull:${t.ref}` })}
-                  />
-                  <IconButton
-                    icon="trash"
-                    label="Delete"
-                    danger
-                    onClick={() =>
-                      run(() => api.deleteRegistryTag(t.repository, t.tag), {
-                        confirm: {
-                          title: `Delete ${t.repository}:${t.tag} from the registry?`,
-                          body: (
-                            <p>
-                              This deletes the manifest {t.digest.slice(0, 19)}…, so <b>every tag pointing at the same digest</b> goes too. Run the
-                              registry’s garbage collection afterwards to free the space.
-                            </p>
-                          ),
-                          confirmLabel: 'Delete',
-                          danger: true,
-                        },
-                        success: `Deleted ${t.repository}:${t.tag}`,
-                        after: poll.refresh, // a delete clears the server's cache
-                      })
-                    }
-                  />
-                </>
-              )}
-            </>
-          )}
+          actions={(t) => [
+            {
+              label: 'Copy reference',
+              icon: 'copy',
+              onClick: () => {
+                void navigator.clipboard?.writeText(t.ref).then(
+                  () => toast(`Copied ${t.ref}`),
+                  () => toast(t.ref),
+                );
+              },
+            },
+            !readOnly && {
+              label: isBusy(`pull:${t.ref}`) ? 'Pulling…' : 'Pull to host',
+              icon: 'download',
+              busy: isBusy(`pull:${t.ref}`),
+              onClick: () => run(() => api.pullImage(t.ref), { success: `Pulled ${t.ref}`, after: onPulled, key: `pull:${t.ref}` }),
+            },
+            !readOnly && {
+              label: 'Delete',
+              icon: 'trash',
+              danger: true,
+              onClick: () =>
+                run(() => api.deleteRegistryTag(t.repository, t.tag), {
+                  confirm: {
+                    title: `Delete ${t.repository}:${t.tag} from the registry?`,
+                    body: (
+                      <p>
+                        This deletes the manifest {t.digest.slice(0, 19)}…, so <b>every tag pointing at the same digest</b> goes too. Run the
+                        registry’s garbage collection afterwards to free the space.
+                      </p>
+                    ),
+                    confirmLabel: 'Delete',
+                    danger: true,
+                  },
+                  success: `Deleted ${t.repository}:${t.tag}`,
+                  after: poll.refresh, // a delete clears the server's cache
+                }),
+            },
+          ]}
+          actionsLabel={(t) => `Actions for ${t.ref}`}
           toolbar={
             <Button
               onClick={() => {

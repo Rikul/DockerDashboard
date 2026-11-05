@@ -199,6 +199,26 @@ func (c *Client) ContainerAction(ctx context.Context, id, action string) error {
 	return c.call(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/"+action, nil, nil, nil)
 }
 
+// ContainerTop lists the processes of a running container.
+func (c *Client) ContainerTop(ctx context.Context, id string) (TopResult, error) {
+	var out TopResult
+	err := c.call(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/top", nil, nil, &out)
+	return out, err
+}
+
+// ContainerChanges lists files added, changed or deleted in the container's
+// filesystem since it was created.
+func (c *Client) ContainerChanges(ctx context.Context, id string) ([]FsChange, error) {
+	var out []FsChange // the daemon answers null when nothing changed
+	err := c.call(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/changes", nil, nil, &out)
+	return out, err
+}
+
+// RenameContainer gives a container a new name.
+func (c *Client) RenameContainer(ctx context.Context, id, name string) error {
+	return c.call(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/rename", url.Values{"name": {name}}, nil, nil)
+}
+
 func (c *Client) RemoveContainer(ctx context.Context, id string, force, volumes bool) error {
 	q := url.Values{"force": {boolStr(force)}, "v": {boolStr(volumes)}}
 	return c.call(ctx, http.MethodDelete, "/containers/"+url.PathEscape(id), q, nil, nil)

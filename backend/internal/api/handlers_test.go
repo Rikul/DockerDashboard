@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -131,5 +132,141 @@ func TestNetworkInspect(t *testing.T) {
 	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/networks/gone", nil))
 	if w.Code != 404 {
 		t.Fatalf("want the daemon's 404, got %d %s", w.Code, w.Body)
+	}
+}
+
+func TestContainerTop(t *testing.T) {
+	top := map[string]any{"Titles": []string{"PID", "CMD"}, "Processes": [][]string{{"1", "nginx"}, {"7", "sh"}}}
+	s := &Server{docker: fakeDocker(t, map[string]any{"/containers/c1/top": top, "/containers/c2/top": 409})}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/containers/{id}/top", s.handleContainerTop)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c1/top", nil))
+	var got struct {
+		Titles    []string   `json:"titles"`
+		Processes [][]string `json:"processes"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil || w.Code != 200 {
+		t.Fatalf("status %d, err %v", w.Code, err)
+	}
+	if strings.Join(got.Titles, ",") != "PID,CMD" || len(got.Processes) != 2 || got.Processes[1][1] != "sh" {
+		t.Fatalf("bad top: %+v", got)
+	}
+	// A container that isn't running is the daemon's 409, not a 502.
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c2/top", nil))
+	if w.Code != 409 {
+		t.Fatalf("want the daemon's 409, got %d %s", w.Code, w.Body)
+	}
+}
+
+func TestContainerTopRedactsCredentials(t *testing.T) {
+	top := map[string]any{
+		"Titles": []string{"PID", "CMD"},
+		"Processes": [][]string{
+			{"1", "app --password=hunter2 --db-token abc123 -v --port 80"},
+			{"2", "env API_KEY=sk-live-1 MODE=prod worker postgres://admin:s3cret@db:5432/app"},
+		},
+	}
+	s := &Server{docker: fakeDocker(t, map[string]any{"/containers/c1/top": top})}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/containers/{id}/top", s.handleContainerTop)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c1/top", nil))
+	body := w.Body.String()
+	for _, secret := range []string{"hunter2", "abc123", "sk-live-1", "s3cret"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("%q reached the browser: %s", secret, body)
+		}
+	}
+	var got struct {
+		Processes [][]string `json:"processes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got.Processes) != 2 {
+		t.Fatalf("status %d, err %v, body %s", w.Code, err, body)
+	}
+	want := []string{
+		"app --password=REDACTED --db-token REDACTED -v --port 80",
+		"env API_KEY=REDACTED MODE=prod worker postgres://admin:REDACTED@db:5432/app",
+	}
+	for i, cmd := range want {
+		if got.Processes[i][0] != strconv.Itoa(i+1) || got.Processes[i][1] != cmd {
+			t.Errorf("row %d: got %q, want %q", i, got.Processes[i], cmd)
+		}
+	}
+}
+
+func TestContainerDiff(t *testing.T) {
+	changes := []map[string]any{{"Path": "/var/log", "Kind": 0}, {"Path": "/tmp/new", "Kind": 1}, {"Path": "/etc/gone", "Kind": 2}}
+	s := &Server{docker: fakeDocker(t, map[string]any{"/containers/c1/changes": changes, "/containers/c2/changes": nil})}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/containers/{id}/diff", s.handleContainerDiff)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c1/diff", nil))
+	var got []ChangeView
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil || w.Code != 200 {
+		t.Fatalf("status %d, err %v", w.Code, err)
+	}
+	want := []ChangeView{{"/etc/gone", "deleted"}, {"/tmp/new", "added"}, {"/var/log", "modified"}}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d: got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	// No changes is an empty list, never null.
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c2/diff", nil))
+	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("want [], got %d %q", w.Code, w.Body)
+	}
+}
+
+func TestContainerRename(t *testing.T) {
+	var gotMethod, gotPath, gotName string
+	status := http.StatusNoContent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotName = r.Method, r.URL.Path, r.URL.Query().Get("name")
+		w.WriteHeader(status)
+		if status >= 400 {
+			json.NewEncoder(w).Encode(map[string]string{"message": "Conflict. The container name is already in use"})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	dc, err := docker.New("tcp://" + strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{docker: dc}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/containers/{id}/rename", s.handleContainerRename)
+	rename := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/containers/c1/rename", strings.NewReader(body)))
+		return w
+	}
+
+	w := rename(`{"name": " web-2 "}`)
+	if w.Code != 200 || gotMethod != "POST" || gotPath != "/containers/c1/rename" || gotName != "web-2" {
+		t.Fatalf("status %d; daemon saw %s %s name=%q", w.Code, gotMethod, gotPath, gotName)
+	}
+
+	// Names the daemon would refuse never reach it.
+	gotPath = ""
+	for _, bad := range []string{`{"name": ""}`, `{"name": "a"}`, `{"name": "-web"}`, `{"name": "a b"}`, `{"name": "a/b"}`, `{"nom": "x"}`, `nope`} {
+		if w := rename(bad); w.Code != 400 {
+			t.Errorf("%s: want 400, got %d", bad, w.Code)
+		}
+	}
+	if gotPath != "" {
+		t.Fatalf("an invalid name reached the daemon: %s", gotPath)
+	}
+
+	// A name already in use is the daemon's 409 with its message.
+	status = http.StatusConflict
+	if w := rename(`{"name": "taken"}`); w.Code != 409 || !strings.Contains(w.Body.String(), "already in use") {
+		t.Fatalf("want the daemon's 409, got %d %s", w.Code, w.Body)
 	}
 }

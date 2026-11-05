@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { ActionMenu, type MenuEntry } from './ActionMenu';
 
 export interface Column<T> {
   key: string;
@@ -28,7 +29,10 @@ interface Props<T> {
   filter?: string;
   onFilter?: (id: string) => void;
   initialSort?: { key: string; dir: 'asc' | 'desc' };
-  actions?: (row: T) => ReactNode;
+  /** Per-row actions, shown in a three-dots menu. Return an empty list for none. */
+  actions?: (row: T) => MenuEntry[];
+  /** Accessible name of a row's menu button, e.g. `Actions for web-1`. */
+  actionsLabel?: (row: T) => string;
   toolbar?: ReactNode;
   empty?: ReactNode;
   rowClass?: (row: T) => string | undefined;
@@ -45,6 +49,7 @@ export function DataTable<T>({
   onFilter,
   initialSort,
   actions,
+  actionsLabel,
   toolbar,
   empty = 'Nothing here',
   rowClass,
@@ -132,7 +137,7 @@ export function DataTable<T>({
                   )}
                 </th>
               ))}
-              {actions && <th className="actions-col">Actions</th>}
+              {actions && <th className="actions-col"><span className="sr-only">Actions</span></th>}
             </tr>
           </thead>
           <tbody>
@@ -151,8 +156,8 @@ export function DataTable<T>({
                     </td>
                   ))}
                   {actions && (
-                    <td>
-                      <div className="row-actions">{actions(row)}</div>
+                    <td className="actions-cell">
+                      <ActionMenu items={actions(row)} label={actionsLabel?.(row)} />
                     </td>
                   )}
                 </tr>

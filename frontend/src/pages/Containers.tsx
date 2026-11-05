@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { api } from '../api';
 import { useActions } from '../actions';
+import type { MenuEntry } from '../components/ActionMenu';
 import { DataTable, type Column, type Filter } from '../components/DataTable';
+import { DiffViewer, TopViewer } from '../components/ContainerViews';
 import { InspectViewer, LogViewer } from '../components/LogViewer';
-import { Badge, Bar, Button, Card, ErrorLine, IconButton, Skeleton } from '../components/ui';
+import { Icon } from '../components/icons';
+import { Badge, Bar, Button, Card, ErrorLine, Skeleton } from '../components/ui';
 import { attentionReason, containerStatus, fmtBytes, fmtDuration, fmtPct, fmtPort, shortHashes } from '../format';
 import type { Poll } from '../hooks';
 import type { Container } from '../types';
@@ -17,68 +20,196 @@ export const containerFilters: Filter<Container>[] = [
   { id: 'attention', label: 'Needs attention', test: (c) => attentionReason(c) != null },
 ];
 
-/** Buttons for one container, by state. Shared with the Overview's attention list. */
-export function ContainerActions({ c, refresh, onLogs, onInspect }: { c: Container; refresh: () => Promise<void>; onLogs: () => void; onInspect?: () => void }) {
+type Viewer = { kind: 'logs' | 'inspect' | 'top' | 'diff'; c: Container };
+
+/**
+ * The row menu for containers, plus the viewers its items open. Shared with
+ * the Overview's attention list: render `viewers` once, and pass `menu` to a
+ * DataTable's `actions`.
+ */
+export function useContainerMenu(refresh: () => Promise<void>): { menu: (c: Container) => MenuEntry[]; viewers: ReactNode } {
   const { run, readOnly, isBusy } = useActions();
-  const act = (action: 'start' | 'stop' | 'restart' | 'pause' | 'unpause' | 'kill', past: string) =>
-    run(() => api.containerAction(c.id, action), { success: `${c.name} ${past}`, after: refresh, key: `${c.id}:${action}` });
-  const busy = (a: string) => isBusy(`${c.id}:${a}`);
-  const live = c.state === 'running' || c.state === 'restarting' || c.state === 'paused';
-  const remove = () =>
-    run(
-      async () => {
-        // Stop gracefully (SIGTERM, then the stop timeout) before removing,
-        // rather than letting a forced remove SIGKILL the process.
-        if (live) await api.containerAction(c.id, 'stop');
-        return api.removeContainer(c.id, c.state === 'dead');
-      },
-      {
-        confirm: {
-          title: `Remove ${c.name}?`,
-          body: (
-            <p>
-              The container and its writable layer are deleted. Named volumes are kept.
-              {live && ' It is running, so it is stopped gracefully first; removal waits for it to exit.'}
-            </p>
-          ),
-          confirmLabel: 'Remove',
-          danger: true,
-        },
-        success: `${c.name} removed`,
-        after: refresh,
-      },
-    );
-  return (
+  const [viewer, setViewer] = useState<Viewer | null>(null);
+  const close = () => setViewer(null);
+  const viewers = viewer && (
     <>
-      <IconButton icon="logs" label="Logs" onClick={onLogs} />
-      {onInspect && <IconButton icon="inspect" label="Inspect" onClick={onInspect} />}
-      {!readOnly && (
-        <>
-          {(c.state === 'exited' || c.state === 'created' || c.state === 'dead') && (
-            <IconButton icon="play" label={busy('start') ? 'Starting…' : 'Start'} onClick={() => act('start', 'started')} busy={busy('start')} />
-          )}
-          {c.state === 'paused' && <IconButton icon="play" label="Unpause" onClick={() => act('unpause', 'resumed')} />}
-          {c.state === 'running' && (
-            <>
-              <IconButton icon="restart" label={busy('restart') ? 'Restarting…' : 'Restart'} onClick={() => act('restart', 'restarted')} busy={busy('restart')} />
-              <IconButton icon="pause" label="Pause" onClick={() => act('pause', 'paused')} />
-            </>
-          )}
-          {(c.state === 'running' || c.state === 'restarting' || c.state === 'paused') && (
-            <IconButton icon="stop" label={busy('stop') ? 'Stopping…' : 'Stop'} onClick={() => act('stop', 'stopped')} busy={busy('stop')} />
-          )}
-          <IconButton icon="trash" label="Remove" danger onClick={remove} />
-        </>
-      )}
+      {viewer.kind === 'logs' && <LogViewer id={viewer.c.id} name={viewer.c.name} onClose={close} />}
+      {viewer.kind === 'inspect' && <InspectViewer title={`Inspect · ${viewer.c.name}`} load={() => api.inspectContainer(viewer.c.id)} onClose={close} />}
+      {viewer.kind === 'top' && <TopViewer id={viewer.c.id} name={viewer.c.name} onClose={close} />}
+      {viewer.kind === 'diff' && <DiffViewer id={viewer.c.id} name={viewer.c.name} onClose={close} />}
     </>
+  );
+  const menu = (c: Container): MenuEntry[] => {
+    const act = (action: 'start' | 'stop' | 'restart' | 'pause' | 'unpause' | 'kill', past: string) =>
+      run(() => api.containerAction(c.id, action), { success: `${c.name} ${past}`, after: refresh, key: `${c.id}:${action}` });
+    const busy = (a: string) => isBusy(`${c.id}:${a}`);
+    const live = c.state === 'running' || c.state === 'restarting' || c.state === 'paused';
+    const remove = () =>
+      run(
+        async () => {
+          // Stop gracefully (SIGTERM, then the stop timeout) before removing,
+          // rather than letting a forced remove SIGKILL the process.
+          if (live) await api.containerAction(c.id, 'stop');
+          return api.removeContainer(c.id, c.state === 'dead');
+        },
+        {
+          confirm: {
+            title: `Remove ${c.name}?`,
+            body: (
+              <p>
+                The container and its writable layer are deleted. Named volumes are kept.
+                {live && ' It is running, so it is stopped gracefully first; removal waits for it to exit.'}
+              </p>
+            ),
+            confirmLabel: 'Remove',
+            danger: true,
+          },
+          success: `${c.name} removed`,
+          after: refresh,
+        },
+      );
+    return [
+      { label: 'Logs', icon: 'logs', onClick: () => setViewer({ kind: 'logs', c }) },
+      { label: 'Inspect', icon: 'inspect', onClick: () => setViewer({ kind: 'inspect', c }) },
+      c.state === 'running' && { label: 'Processes (top)', icon: 'processes', onClick: () => setViewer({ kind: 'top', c }) },
+      { label: 'File changes (diff)', icon: 'diff', onClick: () => setViewer({ kind: 'diff', c }) },
+      !readOnly && (c.state === 'exited' || c.state === 'created' || c.state === 'dead') && {
+        label: busy('start') ? 'Starting…' : 'Start',
+        icon: 'play',
+        busy: busy('start'),
+        onClick: () => act('start', 'started'),
+      },
+      !readOnly && c.state === 'paused' && { label: 'Unpause', icon: 'play', busy: busy('unpause'), onClick: () => act('unpause', 'resumed') },
+      !readOnly && c.state === 'running' && {
+        label: busy('restart') ? 'Restarting…' : 'Restart',
+        icon: 'restart',
+        busy: busy('restart'),
+        onClick: () => act('restart', 'restarted'),
+      },
+      !readOnly && c.state === 'running' && { label: 'Pause', icon: 'pause', busy: busy('pause'), onClick: () => act('pause', 'paused') },
+      !readOnly && live && {
+        label: busy('stop') ? 'Stopping…' : 'Stop',
+        icon: 'stop',
+        busy: busy('stop'),
+        onClick: () => act('stop', 'stopped'),
+      },
+      !readOnly && { label: 'Remove', icon: 'trash', danger: true, onClick: remove },
+    ];
+  };
+  return { menu, viewers };
+}
+
+/** The daemon's rule for container names (at least two characters). */
+const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/;
+
+/**
+ * A container's name. Unless the dashboard is read-only, clicking it turns it
+ * into an input; Enter or the check mark asks for confirmation, then renames.
+ */
+function RenameableName({ c, refresh }: { c: Container; refresh: () => Promise<void> }) {
+  const { run, readOnly, isBusy } = useActions();
+  const [draft, setDraft] = useState<string | null>(null); // null: not editing
+  const input = useRef<HTMLInputElement>(null);
+  const wrap = useRef<HTMLSpanElement>(null);
+  // The confirmation dialog takes focus, which must not count as leaving the field.
+  const confirming = useRef(false);
+  // After a failed or cancelled rename the field is usable again once the
+  // busy state clears (a disabled input can't take focus before that).
+  const [retry, setRetry] = useState(0);
+  const busy = isBusy(`${c.id}:rename`);
+  useEffect(() => {
+    if (retry > 0 && !busy) input.current?.focus();
+  }, [retry, busy]);
+
+  if (readOnly) return <span className="key">{c.name}</span>;
+
+  if (draft === null) {
+    return (
+      <button type="button" className="rename-name key" title="Click to rename" onClick={() => setDraft(c.name)}>
+        {c.name}
+        <Icon name="edit" />
+      </button>
+    );
+  }
+
+  const name = draft.trim();
+  const invalid = name !== '' && !NAME_RE.test(name);
+  const canSubmit = name !== c.name && NAME_RE.test(name) && !busy;
+
+  const submit = async () => {
+    if (!canSubmit || confirming.current) return;
+    confirming.current = true;
+    const done = await run(() => api.renameContainer(c.id, name), {
+      confirm: {
+        title: `Rename ${c.name}?`,
+        body: (
+          <p>
+            <b>{c.name}</b> becomes <b>{name}</b>. Anything that reaches it by the old name, such as other containers on a shared network, links or
+            scripts, has to use the new one.
+            {c.project && ' Compose may give it back its old name the next time the stack is recreated.'}
+          </p>
+        ),
+        confirmLabel: 'Rename',
+      },
+      success: `${c.name} renamed to ${name}`,
+      after: refresh,
+      key: `${c.id}:rename`,
+    });
+    confirming.current = false;
+    if (done) setDraft(null);
+    else setRetry((n) => n + 1);
+  };
+
+  // Safari and macOS Firefox don't focus a clicked button, so the input's
+  // blur has no relatedTarget and would close the editor before the click
+  // lands. Keeping focus in the input avoids that.
+  const keepFocus = (e: MouseEvent) => e.preventDefault();
+
+  return (
+    <span
+      ref={wrap}
+      className="rename-edit"
+      onBlur={(e) => {
+        if (!confirming.current && !wrap.current?.contains(e.relatedTarget as Node | null)) setDraft(null);
+      }}
+    >
+      <input
+        ref={input}
+        className={`rename-input${invalid ? ' invalid' : ''}`}
+        value={draft}
+        autoFocus
+        spellCheck={false}
+        disabled={busy}
+        aria-label={`New name for ${c.name}`}
+        aria-invalid={invalid || undefined}
+        style={{ width: `${Math.max(12, draft.length + 2)}ch` }}
+        onFocus={(e) => e.currentTarget.select()}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            void submit();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setDraft(null);
+          }
+        }}
+      />
+      <button type="button" className="btn icon-only" aria-label="Confirm rename" onMouseDown={keepFocus} title="Rename…" disabled={!canSubmit} onClick={() => void submit()}>
+        <Icon name={busy ? 'spinner' : 'check'} />
+      </button>
+      <button type="button" className="btn icon-only" aria-label="Cancel rename" onMouseDown={keepFocus} title="Cancel" disabled={busy} onClick={() => setDraft(null)}>
+        <Icon name="x" />
+      </button>
+      {invalid && <span className="small bad-text">Letters, digits, _ . - ; at least 2 characters</span>}
+    </span>
   );
 }
 
 export function ContainersPage({ poll, filter, onFilter }: { poll: Poll<Container[]>; filter: string; onFilter: (f: string) => void }) {
   const { run, readOnly } = useActions();
-  const [logs, setLogs] = useState<Container | null>(null);
-  const [inspect, setInspect] = useState<Container | null>(null);
   const rows = poll.data ?? [];
+  const { menu, viewers } = useContainerMenu(poll.refresh);
   const maxCpu = Math.max(100, ...rows.map((c) => c.cpu_pct ?? 0));
 
   const columns: Column<Container>[] = [
@@ -88,7 +219,7 @@ export function ContainersPage({ poll, filter, onFilter }: { poll: Poll<Containe
       sort: (c) => c.name,
       render: (c) => (
         <div className="name-cell">
-          <span className="key">{c.name}</span>
+          <RenameableName c={c} refresh={poll.refresh} />
           {c.project && <span className="muted small">{c.project}</span>}
         </div>
       ),
@@ -174,7 +305,8 @@ export function ContainersPage({ poll, filter, onFilter }: { poll: Poll<Containe
           onFilter={onFilter}
           initialSort={{ key: 'status', dir: 'asc' }}
           rowClass={(c) => (attentionReason(c) ? 'attention' : undefined)}
-          actions={(c) => <ContainerActions c={c} refresh={poll.refresh} onLogs={() => setLogs(c)} onInspect={() => setInspect(c)} />}
+          actions={menu}
+          actionsLabel={(c) => `Actions for ${c.name}`}
           toolbar={
             !readOnly && (
               <Button
@@ -198,8 +330,7 @@ export function ContainersPage({ poll, filter, onFilter }: { poll: Poll<Containe
           }
         />
       )}
-      {logs && <LogViewer id={logs.id} name={logs.name} onClose={() => setLogs(null)} />}
-      {inspect && <InspectViewer title={`Inspect · ${inspect.name}`} load={() => api.inspectContainer(inspect.id)} onClose={() => setInspect(null)} />}
+      {viewers}
     </Card>
   );
 }

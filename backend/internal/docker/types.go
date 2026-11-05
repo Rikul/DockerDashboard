@@ -102,6 +102,19 @@ type ContainerJSON struct {
 	} `json:"HostConfig"`
 }
 
+// TopResult is GET /containers/{id}/top: column titles, then one row per process.
+type TopResult struct {
+	Titles    []string   `json:"Titles"`
+	Processes [][]string `json:"Processes"`
+}
+
+// FsChange is an entry of GET /containers/{id}/changes. Kind is 0 for a
+// modified path, 1 for an added one and 2 for a deleted one.
+type FsChange struct {
+	Path string `json:"Path"`
+	Kind int    `json:"Kind"`
+}
+
 // Image is an entry of GET /images/json.
 type Image struct {
 	ID          string            `json:"Id"`

@@ -3,7 +3,7 @@
 A self-hosted web dashboard for one Docker host. It covers containers, images, volumes and networks, plus a private registry.
 
 - **Overview**: running and stopped containers, a list of what needs attention (restart loops, failing health checks, crashes, OOM kills, memory near its limit), disk use, reclaimable space, CPU over the last hour and memory against limits.
-- **Containers**: search, filter and sort. Start, stop, restart, pause, remove, live logs (follow, filter, download) and inspect.
+- **Containers**: search, filter and sort. Start, stop, restart, pause, remove, rename (click the name), live logs (follow, filter, download), inspect, processes (top) and file changes (diff).
 - **Images**: size, age, which are in use, unused and dangling. Pull, update a tag, remove, prune.
 - **Volumes**: size, which container mounts each one, anonymous vs named. Create, inspect (driver options with credentials redacted), delete, prune.
 - **Networks**: subnet, gateway, attached containers. Create, inspect, connect and disconnect containers, remove, prune.
@@ -77,7 +77,9 @@ All endpoints are under `/api` and return JSON.
 | GET | `/system`, `/stats?minutes=60` | Host info, CPU and memory history |
 | GET | `/containers`, `/containers/{id}` | List (with live CPU and memory), inspect |
 | GET | `/containers/{id}/logs?tail=200&follow=1&timestamps=0` | Server-Sent Events, one JSON line per event |
+| GET | `/containers/{id}/top` · `/containers/{id}/diff` | Processes (`docker top`; 409 unless running), file changes against the image (`docker diff`) |
 | POST | `/containers/{id}/{start,stop,restart,pause,unpause,kill}` | Lifecycle |
+| POST | `/containers/{id}/rename` `{"name"}` | Rename |
 | DELETE | `/containers/{id}?force=&volumes=` · POST `/containers/prune` | Remove |
 | GET | `/images`, `/images/{id}` · POST `/images/pull` `{"ref"}` · DELETE `/images/{id}` · POST `/images/prune?all=` | Images |
 | GET, POST | `/volumes` · GET, DELETE `/volumes/{name}` · POST `/volumes/prune?all=` | Volumes |

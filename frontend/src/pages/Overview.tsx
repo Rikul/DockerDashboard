@@ -1,12 +1,11 @@
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { DataTable, type Column } from '../components/DataTable';
 import { CpuChart, MemChart } from '../components/charts';
-import { LogViewer } from '../components/LogViewer';
 import { Badge, Card, ErrorLine, Kpi, Skeleton } from '../components/ui';
 import { attentionReason, containerStatus, fmtBytes, reclaimableImages, sumSize, unusedVolumes } from '../format';
 import type { Poll } from '../hooks';
 import type { Container, Image, StatsResponse, SystemInfo, Volume } from '../types';
-import { ContainerActions } from './Containers';
+import { useContainerMenu } from './Containers';
 
 interface Props {
   system?: SystemInfo;
@@ -18,7 +17,7 @@ interface Props {
 }
 
 export function OverviewPage({ system, containers, images, volumes, stats, go }: Props) {
-  const [logs, setLogs] = useState<Container | null>(null);
+  const { menu, viewers } = useContainerMenu(containers.refresh);
   const cs = containers.data ?? [];
   const running = cs.filter((c) => c.state === 'running').length;
   const stopped = cs.filter((c) => c.state === 'exited' || c.state === 'dead' || c.state === 'created').length;
@@ -105,11 +104,12 @@ export function OverviewPage({ system, containers, images, volumes, stats, go }:
             rowKey={(c) => c.id}
             columns={attentionCols}
             empty="All containers look healthy."
-            actions={(c) => <ContainerActions c={c} refresh={containers.refresh} onLogs={() => setLogs(c)} />}
+            actions={menu}
+            actionsLabel={(c) => `Actions for ${c.name}`}
           />
         )}
       </Card>
-      {logs && <LogViewer id={logs.id} name={logs.name} onClose={() => setLogs(null)} />}
+      {viewers}
     </>
   );
 }
