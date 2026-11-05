@@ -47,10 +47,21 @@ export function TopViewer({ id, name, onClose }: { id: string; name: string; onC
   const [auto, setAuto] = useState(true);
   const [filter, setFilter] = useState('');
 
+  // Wait for each load to finish before scheduling the next one, so a slow
+  // daemon never piles up requests that would each discard the one before.
   useEffect(() => {
     if (!auto) return;
-    const t = window.setInterval(() => void reload(), TOP_REFRESH_MS);
-    return () => window.clearInterval(t);
+    let live = true;
+    let t: number | undefined;
+    const tick = async () => {
+      await reload();
+      if (live) t = window.setTimeout(tick, TOP_REFRESH_MS);
+    };
+    t = window.setTimeout(tick, TOP_REFRESH_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(t);
+    };
   }, [auto, reload]);
 
   const rows = useMemo(() => {

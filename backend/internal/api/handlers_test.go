@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -156,6 +157,42 @@ func TestContainerTop(t *testing.T) {
 	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c2/top", nil))
 	if w.Code != 409 {
 		t.Fatalf("want the daemon's 409, got %d %s", w.Code, w.Body)
+	}
+}
+
+func TestContainerTopRedactsCredentials(t *testing.T) {
+	top := map[string]any{
+		"Titles": []string{"PID", "CMD"},
+		"Processes": [][]string{
+			{"1", "app --password=hunter2 --db-token abc123 -v --port 80"},
+			{"2", "env API_KEY=sk-live-1 MODE=prod worker postgres://admin:s3cret@db:5432/app"},
+		},
+	}
+	s := &Server{docker: fakeDocker(t, map[string]any{"/containers/c1/top": top})}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/containers/{id}/top", s.handleContainerTop)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/containers/c1/top", nil))
+	body := w.Body.String()
+	for _, secret := range []string{"hunter2", "abc123", "sk-live-1", "s3cret"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("%q reached the browser: %s", secret, body)
+		}
+	}
+	var got struct {
+		Processes [][]string `json:"processes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got.Processes) != 2 {
+		t.Fatalf("status %d, err %v, body %s", w.Code, err, body)
+	}
+	want := []string{
+		"app --password=REDACTED --db-token REDACTED -v --port 80",
+		"env API_KEY=REDACTED MODE=prod worker postgres://admin:REDACTED@db:5432/app",
+	}
+	for i, cmd := range want {
+		if got.Processes[i][0] != strconv.Itoa(i+1) || got.Processes[i][1] != cmd {
+			t.Errorf("row %d: got %q, want %q", i, got.Processes[i], cmd)
+		}
 	}
 }
 

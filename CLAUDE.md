@@ -38,6 +38,6 @@ Vite's `outDir` is `backend/internal/web/dist` (emptied on build, `.gitkeep` res
 - Every state-changing request must carry `X-Requested-With`; the frontend wrapper does this, so use it rather than raw `fetch`.
 - Sign-in is always required (`DASHBOARD_TOKEN`, ≥16 chars); there is no auth-disabled mode.
 - `READ_ONLY` defaults to `true` (the server refuses all writes unless it is set to `false`); new mutating endpoints must respect it.
-- Container env vars must never be sent to the browser (stripped in the API layer), and credential-looking volume driver options are redacted.
+- Container env vars must never be sent to the browser (stripped in the API layer), credential-looking volume driver options are redacted, and so are credential-looking arguments in `docker top` command lines.
 - Daemon 4xx errors pass through with their status and message (`dockerError`); anything else becomes a 502. Routes use Go 1.22 patterns, so a literal segment such as `POST /api/containers/{id}/rename` takes precedence over `POST /api/containers/{id}/{action}`.
 - CI (`.github/workflows/ci.yml`) runs gofmt, `go vet`, `go test -race`, `npm ci` and `npm run build`.

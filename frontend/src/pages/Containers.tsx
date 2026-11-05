@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { api } from '../api';
 import { useActions } from '../actions';
 import type { MenuEntry } from '../components/ActionMenu';
@@ -160,6 +160,11 @@ function RenameableName({ c, refresh }: { c: Container; refresh: () => Promise<v
     else setRetry((n) => n + 1);
   };
 
+  // Safari and macOS Firefox don't focus a clicked button, so the input's
+  // blur has no relatedTarget and would close the editor before the click
+  // lands. Keeping focus in the input avoids that.
+  const keepFocus = (e: MouseEvent) => e.preventDefault();
+
   return (
     <span
       ref={wrap}
@@ -190,10 +195,10 @@ function RenameableName({ c, refresh }: { c: Container; refresh: () => Promise<v
           }
         }}
       />
-      <button type="button" className="btn icon-only" aria-label="Confirm rename" title="Rename…" disabled={!canSubmit} onClick={() => void submit()}>
+      <button type="button" className="btn icon-only" aria-label="Confirm rename" onMouseDown={keepFocus} title="Rename…" disabled={!canSubmit} onClick={() => void submit()}>
         <Icon name={busy ? 'spinner' : 'check'} />
       </button>
-      <button type="button" className="btn icon-only" aria-label="Cancel rename" title="Cancel" disabled={busy} onClick={() => setDraft(null)}>
+      <button type="button" className="btn icon-only" aria-label="Cancel rename" onMouseDown={keepFocus} title="Cancel" disabled={busy} onClick={() => setDraft(null)}>
         <Icon name="x" />
       </button>
       {invalid && <span className="small bad-text">Letters, digits, _ . - ; at least 2 characters</span>}

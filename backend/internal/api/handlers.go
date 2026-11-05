@@ -298,7 +298,49 @@ func (s *Server) handleContainerTop(w http.ResponseWriter, r *http.Request) {
 	if top.Processes == nil {
 		top.Processes = [][]string{}
 	}
+	redactTop(top.Titles, top.Processes)
 	writeJSON(w, http.StatusOK, map[string]any{"titles": top.Titles, "processes": top.Processes})
+}
+
+// commandTitles are the ps columns that hold a process's command line.
+var commandTitles = map[string]bool{"CMD": true, "COMMAND": true, "ARGS": true}
+
+// urlPassword matches the password in a URL's user info (scheme://user:pass@host).
+var urlPassword = regexp.MustCompile(`(://[^/\s:@]*:)[^/\s@]+@`)
+
+// redactTop hides credential-looking arguments in the command column of a
+// docker top result, in place. Processes often take passwords or tokens on
+// their command line (--password=x, --token x, API_KEY=x, user:pass@host).
+func redactTop(titles []string, procs [][]string) {
+	for col, t := range titles {
+		if !commandTitles[strings.ToUpper(t)] {
+			continue
+		}
+		for _, row := range procs {
+			if col < len(row) {
+				row[col] = redactCommand(row[col])
+			}
+		}
+	}
+}
+
+func redactCommand(cmd string) string {
+	args := strings.Fields(cmd)
+	for i := 0; i < len(args); i++ {
+		args[i] = urlPassword.ReplaceAllString(args[i], "${1}REDACTED@")
+		if name, _, ok := strings.Cut(args[i], "="); ok {
+			if secretKey.MatchString(name) {
+				args[i] = name + "=REDACTED"
+			}
+			continue
+		}
+		// "--password value": the value is the next argument.
+		if strings.HasPrefix(args[i], "-") && secretKey.MatchString(args[i]) && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			args[i+1] = "REDACTED"
+			i++
+		}
+	}
+	return strings.Join(args, " ")
 }
 
 // ChangeView is one path in a container's filesystem diff.
