@@ -4,9 +4,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -38,6 +41,44 @@ func envBool(key string, def bool) bool {
 	return b
 }
 
+// loadToken returns the sign-in token: DASHBOARD_TOKEN, else the contents of
+// DASHBOARD_TOKEN_FILE. With neither, it generates a random token (generated
+// is true) and, when a file path is set but the file doesn't exist yet, saves
+// it there so the same token is used after a restart.
+func loadToken(token, file string) (_ string, generated bool, _ error) {
+	if token == "" && file != "" {
+		b, err := os.ReadFile(file)
+		switch {
+		case err == nil:
+			token = strings.TrimSpace(string(b))
+			if token == "" {
+				return "", false, fmt.Errorf("DASHBOARD_TOKEN_FILE %s is empty", file)
+			}
+		case errors.Is(err, fs.ErrNotExist):
+			// Generated below and saved here.
+		default:
+			return "", false, fmt.Errorf("read DASHBOARD_TOKEN_FILE: %w", err)
+		}
+	}
+	if token == "" {
+		buf := make([]byte, 24)
+		if _, err := rand.Read(buf); err != nil {
+			return "", false, fmt.Errorf("generate token: %w", err)
+		}
+		token = hex.EncodeToString(buf)
+		if file != "" {
+			if err := os.WriteFile(file, []byte(token+"\n"), 0o600); err != nil {
+				return "", false, fmt.Errorf("save generated token to DASHBOARD_TOKEN_FILE: %w", err)
+			}
+		}
+		return token, true, nil
+	}
+	if len(token) < 16 {
+		return "", false, errors.New("DASHBOARD_TOKEN must be at least 16 characters")
+	}
+	return token, false, nil
+}
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("fatal", "err", err)
@@ -55,19 +96,18 @@ func run() error {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
-	token := os.Getenv("DASHBOARD_TOKEN")
-	if f := os.Getenv("DASHBOARD_TOKEN_FILE"); f != "" && token == "" {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return fmt.Errorf("read DASHBOARD_TOKEN_FILE: %w", err)
-		}
-		token = strings.TrimSpace(string(b))
+	token, generated, err := loadToken(os.Getenv("DASHBOARD_TOKEN"), os.Getenv("DASHBOARD_TOKEN_FILE"))
+	if err != nil {
+		return err
 	}
-	switch {
-	case token == "":
-		return errors.New("set DASHBOARD_TOKEN (or DASHBOARD_TOKEN_FILE) to a long random secret")
-	case len(token) < 16:
-		return errors.New("DASHBOARD_TOKEN must be at least 16 characters")
+	if generated {
+		// Printed on its own lines so it is easy to find in `docker compose logs`.
+		fmt.Fprintf(os.Stderr, "\n  Generated a sign-in token: %s\n\n", token)
+		if f := os.Getenv("DASHBOARD_TOKEN_FILE"); f != "" {
+			slog.Info("saved the generated token; it is reused on restart", "file", f)
+		} else {
+			slog.Warn("the generated token changes on every restart; set DASHBOARD_TOKEN or DASHBOARD_TOKEN_FILE to keep it")
+		}
 	}
 
 	dc, err := docker.New(os.Getenv("DOCKER_HOST"))

@@ -1,9 +1,11 @@
 # Docker Dashboard
 #
-#   echo "DASHBOARD_TOKEN=$(openssl rand -hex 24)" > .env
 #   docker compose up -d --build
+#   docker compose logs dashboard    # shows the generated sign-in token
 #
-# then open http://localhost:8080 and sign in with that token.
+# then open http://localhost:8080 and sign in with that token. It is saved in
+# the dashboard-data volume and reused on restart. To pick your own instead,
+# put DASHBOARD_TOKEN=... (at least 16 characters) in .env.
 
 services:
   dashboard:
@@ -15,7 +17,9 @@ services:
       # before exposing it to a network.
       - "127.0.0.1:8080:8080"
     environment:
-      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?set DASHBOARD_TOKEN in .env}
+      # Optional: when empty, a token is generated and saved to the file below.
+      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:-}
+      DASHBOARD_TOKEN_FILE: /data/token
       # Read-only by default; set READ_ONLY=false in .env to allow changes.
       READ_ONLY: ${READ_ONLY:-true}
       # Optional private registry for the Registry tab:
@@ -26,6 +30,7 @@ services:
       # Full control of Docker. Note: ":ro" on a socket does NOT make the API
       # read-only; READ_ONLY or the socket proxy below does that.
       - /var/run/docker.sock:/var/run/docker.sock
+      - dashboard-data:/data
 
   # ---- Hardened alternative: talk to Docker through a filtering proxy.
   # Remove the socket mount above, set DOCKER_HOST=tcp://socket-proxy:2375 on
@@ -49,3 +54,6 @@ services:
   #     ALLOW_RESTARTS: 1
   #   volumes:
   #     - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  dashboard-data:

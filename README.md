@@ -14,11 +14,11 @@ A self-hosted web dashboard for one Docker host. It covers containers, images, v
 ## Quick start
 
 ```sh
-echo "DASHBOARD_TOKEN=$(openssl rand -hex 24)" > .env
 docker compose up -d --build
+docker compose logs dashboard   # the generated sign-in token is printed here
 ```
 
-Open <http://localhost:8080> and sign in with the token from `.env`.
+Open <http://localhost:8080> and sign in with that token. It is saved in the `dashboard-data` volume, so it stays the same across restarts and upgrades. Lost it? `docker compose cp dashboard:/data/token - | tar -xO` prints it again; `docker compose down -v` deletes the volume so a new one is generated on the next start. To pick your own token instead, put `DASHBOARD_TOKEN=...` (at least 16 characters) in `.env`.
 
 The dashboard starts **read-only**. To start, stop, remove, pull and so on, add `READ_ONLY=false` to `.env` and run `docker compose up -d` again.
 
@@ -38,7 +38,8 @@ Running the backend on its own without building the frontend first serves the AP
 
 | Variable | Default | |
 |---|---|---|
-| `DASHBOARD_TOKEN` | — (required) | Shared secret for signing in, at least 16 characters. Or set `DASHBOARD_TOKEN_FILE` to read it from a file (Docker secrets). Sign-in can't be turned off. |
+| `DASHBOARD_TOKEN` | generated | Shared secret for signing in, at least 16 characters. Sign-in can't be turned off. |
+| `DASHBOARD_TOKEN_FILE` | `/data/token` in compose | Read the token from this file (e.g. a Docker secret) when `DASHBOARD_TOKEN` is empty. If the file doesn't exist, a random token is generated, saved there and printed to the logs. With neither variable set, a new token is generated and printed on every start. |
 | `READ_ONLY` | `true` | Refuses every change; viewing and logs still work. Set `false` to allow changes. |
 | `LISTEN_ADDR` | `:8080` | Address the server listens on. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | `unix://…` or `tcp://host:2375`. TLS to the daemon isn't supported yet. |
