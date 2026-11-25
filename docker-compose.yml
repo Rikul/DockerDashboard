@@ -4,8 +4,8 @@
 #   docker compose logs dashboard    # shows the generated sign-in token
 #
 # then open http://localhost:8080 and sign in with that token. It is saved in
-# the dashboard-data volume and reused on restart. To pick your own instead,
-# put DASHBOARD_TOKEN=... (at least 16 characters) in .env.
+# the dashboard-data volume and reused on restart. The token is never read
+# from .env, so a stray .env file can't set or leak it.
 
 services:
   dashboard:
@@ -17,11 +17,10 @@ services:
       # before exposing it to a network.
       - "127.0.0.1:8080:8080"
     environment:
-      # Optional: when empty, a token is generated and saved to the file below.
-      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:-}
+      # Generated on first start and saved here (see the top of this file).
       DASHBOARD_TOKEN_FILE: /data/token
-      # Read-only by default; set READ_ONLY=false in .env to allow changes.
-      READ_ONLY: ${READ_ONLY:-true}
+      # Read-only by default; change to "false" to allow changes.
+      READ_ONLY: "true"
       # Optional private registry for the Registry tab:
       REGISTRY_URL: ${REGISTRY_URL:-}
       REGISTRY_USERNAME: ${REGISTRY_USERNAME:-}

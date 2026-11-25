@@ -18,9 +18,9 @@ docker compose up -d --build
 docker compose logs dashboard   # the generated sign-in token is printed here
 ```
 
-Open <http://localhost:8080> and sign in with that token. It is saved in the `dashboard-data` volume, so it stays the same across restarts and upgrades. Lost it? `docker compose cp dashboard:/data/token - | tar -xO` prints it again; `docker compose down -v` deletes the volume so a new one is generated on the next start. To pick your own token instead, put `DASHBOARD_TOKEN=...` (at least 16 characters) in `.env`.
+Open <http://localhost:8080> and sign in with that token. It is saved in the `dashboard-data` volume, so it stays the same across restarts and upgrades. Lost it? `docker compose cp dashboard:/data/token - | tar -xO` prints it again; `docker compose down -v` deletes the volume so a new one is generated on the next start. The compose file never reads the token from `.env`.
 
-The dashboard starts **read-only**. To start, stop, remove, pull and so on, add `READ_ONLY=false` to `.env` and run `docker compose up -d` again.
+The dashboard starts **read-only**. To start, stop, remove, pull and so on, set `READ_ONLY: "false"` in `docker-compose.yml` and run `docker compose up -d` again.
 
 ## Development
 
@@ -38,7 +38,7 @@ Running the backend on its own without building the frontend first serves the AP
 
 | Variable | Default | |
 |---|---|---|
-| `DASHBOARD_TOKEN` | generated | Shared secret for signing in, at least 16 characters. Sign-in can't be turned off. |
+| `DASHBOARD_TOKEN` | generated | Shared secret for signing in, at least 16 characters. Sign-in can't be turned off. Not passed through by the compose file, which uses the generated token instead; useful when running the binary directly. |
 | `DASHBOARD_TOKEN_FILE` | `/data/token` in compose | Read the token from this file (e.g. a Docker secret) when `DASHBOARD_TOKEN` is empty. If the file doesn't exist, a random token is generated, saved there and printed to the logs. With neither variable set, a new token is generated and printed on every start. |
 | `READ_ONLY` | `true` | Refuses every change; viewing and logs still work. Set `false` to allow changes. |
 | `LISTEN_ADDR` | `:8080` | Address the server listens on. |
