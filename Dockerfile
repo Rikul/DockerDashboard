@@ -16,10 +16,14 @@ RUN go mod download
 COPY backend/ ./
 COPY --from=web /src/backend/internal/web/dist ./internal/web/dist
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/docker-dashboard ./cmd/server
+# Empty /data for the generated sign-in token, writable as root or as the
+# distroless nonroot user (a new named volume copies this ownership).
+RUN mkdir -p /out/data
 
 # ---- runtime: no shell, no package manager
 FROM gcr.io/distroless/static-debian12
 COPY --from=api /out/docker-dashboard /docker-dashboard
+COPY --from=api --chown=65532:65532 /out/data /data
 EXPOSE 8080
 # The process needs access to the Docker socket. Mounting it as root is the
 # simplest option; to run as a non-root user instead, add the socket's group
